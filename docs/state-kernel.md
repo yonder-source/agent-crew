@@ -51,6 +51,16 @@ age and PID absence alone never authorize replacement.
   repeated decision identity replays only when its arguments match. Rejected
   stale or unhealthy intake mutations are retained in append-only
   `intake_rejection_events`, including requests made before a job exists.
+- `AdmissionDiscovery` polls through a provider interface, records issue,
+  readiness and approval evidence, accepts dependencies only from the provider's
+  native GitHub `blocked_by` read, and sends current evidence through atomic
+  admission. Non-coding prerequisite proofs are loaded from current, authorized
+  `PrerequisiteConfirmationStore` records.
+- `CollaborativeIssueWriteCoordinator` persists preflight, title/body writes,
+  each native dependency change and final readback as separate effect steps.
+  It updates the retained scope revision and job binding only after the remote
+  snapshot matches the agreed proposal. Uncertain results stay in the effect
+  ledger for reconciliation.
 - `EffectStore.begin` persists an operation identity, argument fingerprint,
   target, expected job/execution/scope/policy versions, authorization evidence,
   step identities and the intent audit event in one transaction. The caller
@@ -95,7 +105,7 @@ unfiltered request bodies in audit payloads.
 ## Migrations and checks
 
 Add ordered schema changes to `controllerMigrations` in `src/migrations.ts`.
-Do not edit an applied migration; add the next version and cover rollback,
+Do not edit an applied migration; add the next version and cover upgrade,
 reopen and constraint behavior in temporary-database tests. `openDatabase`
 verifies WAL mode, `synchronous=FULL`, foreign keys and the busy timeout before
 applying migrations.

@@ -633,6 +633,21 @@ export class IssueScopeStore {
 		return row ? mapHead(row) : null;
 	}
 
+	getRevisionBySourceId(
+		repositoryId: string,
+		issueId: string,
+		sourceRevisionId: string,
+	): IssueScopeRevision | null {
+		const row = this.state.database
+			.prepare(`
+				SELECT * FROM issue_scope_revisions
+				WHERE repository_id = ? AND issue_id = ? AND source_revision_id = ?
+				ORDER BY rowid DESC LIMIT 1
+			`)
+			.get(repositoryId, issueId, sourceRevisionId) as RawRevision | undefined;
+		return row ? mapRevision(row) : null;
+	}
+
 	getRevision(scopeRevisionId: string): IssueScopeRevision | null {
 		const row = this.state.database
 			.prepare(

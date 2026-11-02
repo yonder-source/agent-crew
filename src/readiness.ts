@@ -127,6 +127,35 @@ export class ReadinessEvidenceStore {
 					input.writerGeneration,
 					this.state.now().toISOString(),
 				);
+				const existing = this.get(input.evidenceId);
+				if (existing) {
+					const expected: ReadinessEvidence = {
+						evidenceId: input.evidenceId,
+						repositoryId: input.repositoryId,
+						issueId: input.issueId,
+						scopeRevisionId: input.scopeRevisionId,
+						source: input.source,
+						approverIdentity: input.approverIdentity,
+						authorityEvidence: input.authorityEvidence,
+						labelPresent: input.labelPresent,
+						observedAt: input.observedAt,
+						writerGeneration: input.writerGeneration,
+					};
+					if (input.githubLabelEventId)
+						expected.githubLabelEventId = input.githubLabelEventId;
+					if (input.slackConversationId)
+						expected.slackConversationId = input.slackConversationId;
+					if (input.slackApprovalReceiptId)
+						expected.slackApprovalReceiptId = input.slackApprovalReceiptId;
+					if (input.labelWriteOperationId)
+						expected.labelWriteOperationId = input.labelWriteOperationId;
+					if (canonicalJson(existing) !== canonicalJson(expected))
+						throw new StateError(
+							"EVIDENCE_ID_CONFLICT",
+							"Readiness evidence identity was reused with changed evidence",
+						);
+					return existing;
+				}
 				const revision = this.state.database
 					.prepare(`
         SELECT repository_id, issue_id FROM issue_scope_revisions WHERE scope_revision_id = ?
