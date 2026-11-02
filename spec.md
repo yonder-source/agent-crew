@@ -195,6 +195,13 @@ Poll only the issue title, body and declared dependencies at the configured
 interval, and verify freshness before publication. Match expected writes to
 durable receipts. Unchanged content invokes no model and does not interrupt coding.
 
+For each Controller issue write, retain the operation ID, issue ID, expected
+scope revision, preflight and proposed fields, write outcome, readback and
+observation times. Record verified convergence separately from evidence that the
+Controller authored the change; matching final content alone does not establish
+authorship. Apply native dependency changes as separate effects from title/body
+writes, with their own intent, outcome and readback.
+
 **Edge cases**
 
 - Failed reads leave verification unavailable or delayed.
@@ -206,9 +213,17 @@ durable receipts. Unchanged content invokes no model and does not interrupt codi
 - Concurrent edits during an agreed update: durably queue the proposed version,
   preserve the remote version and notify the human in Slack. Revalidate the
   resolved version before applying it.
-- Without atomic conditional updates, use a fresh preflight read, write and
-  readback. V1 accepts the remaining risk of overwriting an undetected edit
-  between read and write.
+- Partial dependency update: retain each relationship operation's outcome and
+  reconcile the remote relations before retrying; do not treat a partly applied
+  set as an atomic issue update.
+- **Known residual risk (T02):** GitHub issue updates lack a verified atomic
+  conditional write in this design. Use a fresh preflight read, write and
+  readback, but recognize that a concurrent undetected edit can still be
+  overwritten. Treat this as an exposed residual risk, not evidence of a
+  conflict-free write. Preserve available evidence and route detected conflicts
+  for human resolution. Future hardening: use provider-supported conditional
+  updates or an equivalent compare-and-swap, then verify its behavior before
+  removing this risk entry.
 
 ### R6. Execution, budgets and interruption
 
@@ -468,7 +483,7 @@ Resolve each contract before implementing dependent components.
 | ID | Contract to complete | Required output |
 | --- | --- | --- |
 | T01 | Admission and initial scope evidence | Settled in R4: human-authorized readiness through GitHub or Slack/Controller, revision-bound approval evidence, native `blocked_by` dependencies, and the missing-scope clarification path. Verify these paths and the readiness-removal/start boundary during implementation. |
-| T02 | Issue writes | Expected content before and after each write, receipts, edit attribution, conflict detection and conditional-write support; document the remaining overwrite race |
+| T02 | Issue writes | Settled in R5 with a known residual risk: preflight/write/readback can overwrite an undetected concurrent edit because atomic conditional updates are unverified. Preserve evidence and route detected conflicts for human resolution; future hardening is provider-supported conditional update or compare-and-swap. |
 | T03 | Persistence and lifecycle | Controller process layout, job and execution transitions, atomic version and ownership updates, observation ordering and rules for rebuilding status views |
 | T04 | External-effect adapters | Schemas for each operation, key scope and retention, argument fingerprints, transactions for intent and audit records, retry budgets and reconciliation evidence |
 | T05 | Runtime and privilege grants | Pinned OpenClaw and Swarm versions, management UI page integration, runtime placement, tool and network enforcement, service access to secrets and host operations, internal authentication and rotation |
