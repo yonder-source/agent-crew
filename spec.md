@@ -76,6 +76,13 @@ execution policy and Docker Secret references.
 Map authorized humans' GitHub and Slack identities and configure their
 per-repository permissions.
 
+Privileged UI actions use a custom Gateway method carrying a stable,
+server-authenticated user profile. Map that profile to configured human
+permissions; never accept identity supplied by a browser or agent. Each
+installation selects a supported verified-person authentication mode, such as
+Tailscale identity or a trusted proxy. Refuse human decisions when identity is
+missing, shared or unresolved.
+
 Validate credentials, secret identities and readiness of configured agent
 roles and tools before activating a configuration revision. Read the saved
 configuration back to verify activation and report successful activation.
@@ -232,12 +239,23 @@ writes, with their own intent, outcome and readback.
 - Run each execution in an isolated, non-root runtime with pinned source,
   explicit inputs and declared validation commands. Exclude host home
   directories, other-job files, Docker sockets and infrastructure credentials.
+- Use a per-execution paired OpenClaw node with native Codex remote execution
+  for coding file and process tools. Slack transport and model credentials stay
+  on the Gateway. The node receives only its scoped runtime identity; Gateway
+  host-tool fallbacks are unavailable to coding executions.
+- Run the trusted runtime supervisor as a separate host process. It owns
+  validated Swarm task operations and the independent active-time deadline,
+  exposes a narrow authenticated API to the Controller, and cannot write
+  workflow state or publish code. Task runtimes receive no Swarm authority.
 - Enforce workspace, input and tool grants outside the model, including for
   subprocesses and package scripts. Installation follows task and environment
   policy; package scripts cannot install globally or on the host.
 - Restrict outbound access to configured dependency and task-service
   destinations. Block management endpoints and unrelated internal networks;
   extra access needs human authorization.
+- Qualify official OpenClaw 2026.10.9 against its packaged SDK and dependency
+  security before pinning the image digest and matching SDK. Record and qualify
+  the exact Docker Engine/Swarm version used by the installation.
 
 **Budget accounting**
 
@@ -526,7 +544,7 @@ Resolve each contract before implementing dependent components.
 | T02 | Issue writes | Settled in R5 with a known residual risk: preflight/write/readback can overwrite an undetected concurrent edit because atomic conditional updates are unverified. Preserve evidence and route detected conflicts for human resolution; future hardening is provider-supported conditional update or compare-and-swap. |
 | T03 | Persistence and lifecycle | Settled in R8 and ADRs 0002–0003: one installation-wide writer holds a host-local OS lock; 5-second heartbeat with 15-second unhealthy threshold never authorizes takeover. A replacement waits for confirmed process exit and lock release, increments the writer generation, and reconciles in-flight effects. Verify process replacement, restart recovery and stale-generation fencing during implementation. |
 | T04 | External-effect adapters | Settled in R8: stable command and per-effect step identities, intent/audit before execution, version-fenced receipts, unknown-outcome reconciliation, and bounded adapter-specific retries. Set numeric limits before operational acceptance; verify provider receipts and reconciliation during implementation. |
-| T05 | Runtime and privilege grants | Pinned OpenClaw and Swarm versions, management UI page integration, runtime placement, tool and network enforcement, service access to secrets and host operations, internal authentication and rotation |
+| T05 | Runtime and privilege grants | Settled in R1/R6: qualify OpenClaw 2026.10.9, per-execution paired-node Codex remote execution, separate Swarm/deadline supervisor, and server-authenticated UI identity. Pin the qualified image/SDK and installation Swarm version; verify tool, network, identity and stop boundaries before unattended coding. |
 | T06 | Source and backup recovery | Archive format, capture schedule, encryption, access controls, a consistent database and artifact manifest, and a restore procedure |
 | T07 | Metering and limits | Hook coverage, loop detection and stopping a specific run; usage and burn-rate thresholds, grace periods and active-time accounting |
 | T08 | Validation and protected changes | Validation of the exact candidate, required CI checks, authorized reviewer identities, detection of protected changes and escalation of uncertain cases |
