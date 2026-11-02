@@ -452,7 +452,9 @@ credentials.
 Before destructive runtime cleanup, confirm that execution has stopped and
 preserve unfinished source in a verified private checkpoint. Include Git
 history, local commits, tracked and untracked task files, source identity and
-restore metadata; exclude credentials. Test restoration in a fresh runtime.
+restore metadata; exclude credentials. Store it as a standalone compressed
+archive with a versioned manifest and content hashes. Reject unsafe paths and
+verify restoration in a fresh runtime before allowing cleanup.
 
 Apply the configured retention period to successful-job checkpoints. Keep
 unfinished or blocked checkpoints until those jobs are explicitly resolved.
@@ -464,7 +466,20 @@ external effects while active operations settle. Preserve queued work, pending
 questions and jobs awaiting review. Confirm that the old writer has stopped,
 activate the replacement and reconcile ownership. Then reopen admission.
 
-Keep consistent off-host backups of workflow state and source artifacts.
+Keep consistent off-host recovery sets of workflow state and referenced source
+artifacts. Fence artifact garbage collection while a set is in progress. Create
+the database copy with SQLite's online backup API; enumerate artifact references
+from that completed copy, then copy and verify the immutable artifacts. Publish
+the recovery-set manifest last so an incomplete set cannot replace the last
+complete one. Configure the off-host target,
+access controls and storage encryption per installation; application-level
+artifact encryption is not required.
+
+Recovery restores durable jobs, questions, scope and checkpoints, not complete
+OpenClaw conversation history. Recreate Gateway sessions as needed from durable
+job state and available Slack history. A recovery set does not contain Swarm
+manager state or credentials; on a fresh host the operator reprovisions Docker
+Secrets and other credentials before services resume.
 
 **Edge cases**
 
@@ -476,10 +491,16 @@ Keep consistent off-host backups of workflow state and source artifacts.
   restore the checkpoint in a fresh runtime. Missing source or uncertain
   ownership blocks restart.
 - Use crash recovery and stale-worker fencing for unplanned replacement.
-- After restoring a backup, keep dispatch paused. Reconcile restored records
-  with actual runtimes and external state. Verify restored state references
-  recoverable source artifacts. Preserve newer remote facts and prevent
-  duplicate execution.
+- After any backup restore or host-loss recovery, keep admissions and effects
+  paused until the restore gate passes. Verify database integrity, foreign keys
+  and schema compatibility; verify every restored checkpoint reference resolves
+  to a recoverable artifact with matching hashes. Compare restored records with
+  current runtimes, branches, PRs and external effects. Preserve and reconcile
+  newer remote facts rather than overwriting them with restored state; prevent
+  duplicate execution or effects. Unresolved or unavailable evidence keeps
+  admissions paused and exposes a recovery blocker for human resolution.
+- After host loss, restore into fresh state and artifact paths and reprovision
+  platform secrets out of band before services resume.
 
 ## 5. Default policies and unresolved limits
 
@@ -545,7 +566,7 @@ Resolve each contract before implementing dependent components.
 | T03 | Persistence and lifecycle | Settled in R8 and ADRs 0002–0003: one installation-wide writer holds a host-local OS lock; 5-second heartbeat with 15-second unhealthy threshold never authorizes takeover. A replacement waits for confirmed process exit and lock release, increments the writer generation, and reconciles in-flight effects. Verify process replacement, restart recovery and stale-generation fencing during implementation. |
 | T04 | External-effect adapters | Settled in R8: stable command and per-effect step identities, intent/audit before execution, version-fenced receipts, unknown-outcome reconciliation, and bounded adapter-specific retries. Set numeric limits before operational acceptance; verify provider receipts and reconciliation during implementation. |
 | T05 | Runtime and privilege grants | Settled in R1/R6: qualify OpenClaw 2026.10.9, per-execution paired-node Codex remote execution, separate Swarm/deadline supervisor, and server-authenticated UI identity. Pin the qualified image/SDK and installation Swarm version; verify tool, network, identity and stop boundaries before unattended coding. |
-| T06 | Source and backup recovery | Archive format, capture schedule, encryption, access controls, a consistent database and artifact manifest, and a restore procedure |
+| T06 | Source and backup recovery | Settled in R10: verified standalone source archives; SQLite online backup with snapshot-derived artifact references and a final recovery manifest; every restore verifies database/schema and artifact integrity, reconciles current external facts, and keeps admissions/effects paused until the gate passes. Full OpenClaw conversation history, Swarm manager state and application-level artifact encryption are out of scope. Configure off-host target, storage controls, cadence and retention before operational acceptance; verify host-loss restore during implementation. |
 | T07 | Metering and limits | Hook coverage, loop detection and stopping a specific run; usage and burn-rate thresholds, grace periods and active-time accounting |
 | T08 | Validation and protected changes | Validation of the exact candidate, required CI checks, authorized reviewer identities, detection of protected changes and escalation of uncertain cases |
 | T09 | Operations and packaging | Repeatable installation, upgrades and maintenance; off-host storage configuration; access and retention policies; release packaging |
