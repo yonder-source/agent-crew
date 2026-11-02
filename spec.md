@@ -264,6 +264,12 @@ from active time. Include observable usage from retries, fallbacks, compaction
 and delegated sessions. Preserve both totals across restarts, repairs and scope
 revisions.
 
+Use the live cumulative output count for output and burn-rate guards, and
+reconcile it with fuller attempt-final usage without double-counting. Mark
+input, cache and total usage partial or unknown when the runtime does not expose
+them. Enforce usage limits only for observed metrics; they do not guarantee a
+hard provider billing cap.
+
 Use native loop detection. Enforce the active-time limit independently of the
 Controller.
 
@@ -567,6 +573,6 @@ Resolve each contract before implementing dependent components.
 | T04 | External-effect adapters | Settled in R8: stable command and per-effect step identities, intent/audit before execution, version-fenced receipts, unknown-outcome reconciliation, and bounded adapter-specific retries. Set numeric limits before operational acceptance; verify provider receipts and reconciliation during implementation. |
 | T05 | Runtime and privilege grants | Settled in R1/R6: qualify OpenClaw 2026.10.9, per-execution paired-node Codex remote execution, separate Swarm/deadline supervisor, and server-authenticated UI identity. Pin the qualified image/SDK and installation Swarm version; verify tool, network, identity and stop boundaries before unattended coding. |
 | T06 | Source and backup recovery | Settled in R10: verified standalone source archives; SQLite online backup with snapshot-derived artifact references and a final recovery manifest; every restore verifies database/schema and artifact integrity, reconciles current external facts, and keeps admissions/effects paused until the gate passes. Full OpenClaw conversation history, Swarm manager state and application-level artifact encryption are out of scope. Configure off-host target, storage controls, cadence and retention before operational acceptance; verify host-loss restore during implementation. |
-| T07 | Metering and limits | Hook coverage, loop detection and stopping a specific run; usage and burn-rate thresholds, grace periods and active-time accounting |
+| T07 | Metering and limits | Settled in R6: use live cumulative output for output/burn-rate guards and reconcile fuller attempt-final usage without double-counting; mark unavailable input, cache or total usage partial/unknown. Limits apply only to observed metrics and are not a hard provider billing cap. Set thresholds and metering grace before operational acceptance; verify plugin delivery, resets, grace and abort overshoot. |
 | T08 | Validation and protected changes | Validation of the exact candidate, required CI checks, authorized reviewer identities, detection of protected changes and escalation of uncertain cases |
 | T09 | Operations and packaging | Repeatable installation, upgrades and maintenance; off-host storage configuration; access and retention policies; release packaging |
