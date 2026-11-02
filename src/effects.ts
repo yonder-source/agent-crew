@@ -239,15 +239,24 @@ export class EffectStore {
     return this.state.database.transaction(() => {
       this.state.assertWriter(writerGeneration, occurredAt);
       const step = this.state.database.prepare(`
-        SELECT step.*, operation.job_id, operation.writer_generation
+        SELECT step.*, operation.job_id, operation.writer_generation, operation.scope_revision_id
         FROM effect_steps step JOIN effect_operations operation USING (operation_id)
         WHERE step.operation_id = ? AND step.step_id = ?
-      `).get(operationId, stepId) as (RawStep & { job_id: string; writer_generation: number }) | undefined;
+      `).get(operationId, stepId) as (
+        RawStep & { job_id: string; writer_generation: number; scope_revision_id: string }
+      ) | undefined;
       if (
         step?.status !== 'pending'
         || step.started_at !== null
         || step.writer_generation !== writerGeneration
       ) return false;
+      if (this.state.getJobOrThrow(step.job_id).scope_revision_id !== step.scope_revision_id) {
+        this.appendAudit(operationId, 'effect_step_start_rejected_stale_scope', {
+          stepId,
+          expectedScopeRevisionId: step.scope_revision_id,
+        }, writerGeneration, occurredAt);
+        return false;
+      }
       const blockedDependency = this.state.database.prepare(`
         SELECT 1 AS blocked
         FROM effect_step_dependencies dependency

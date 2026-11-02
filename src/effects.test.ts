@@ -101,3 +101,24 @@ test('blocks a new matching operation until it explicitly replaces an unknown on
     fixture.close();
   }
 });
+
+test('refuses to start an intent after its job scope revision changes', () => {
+  const fixture = createStateFixture();
+  try {
+    const job = createJob(fixture.jobs);
+    const effects = new EffectStore(new StateContext(fixture.database));
+    effects.begin(beginInput(job.jobId));
+    fixture.jobs.transition({
+      jobId: job.jobId,
+      expectedVersion: 2,
+      writerGeneration: 1,
+      scopeRevisionId: 'scope-2',
+      eventType: 'scope_revision_changed',
+    });
+
+    assert.equal(effects.claimStepStart('operation-1', 'step-write', 1), false);
+    assert.equal(effects.listAudit('operation-1').at(-1)?.eventType, 'effect_step_start_rejected_stale_scope');
+  } finally {
+    fixture.close();
+  }
+});
