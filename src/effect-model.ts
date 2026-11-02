@@ -58,6 +58,9 @@ export type EffectStep = {
   resultGeneration: number | null;
   resultSource: EffectResultSource | null;
   rowVersion: number;
+  startedGeneration: number | null;
+  startedAt: string | null;
+  attemptCount: number;
   createdAt: string;
   updatedAt: string;
   dependsOn: string[];
@@ -116,6 +119,9 @@ export type RawStep = {
   result_generation: number | null;
   result_source: EffectResultSource | null;
   row_version: number;
+  started_generation: number | null;
+  started_at: string | null;
+  attempt_count: number;
   created_at: string;
   updated_at: string;
 };
@@ -214,6 +220,9 @@ export function mapStep(row: RawStep, dependsOn: string[]): EffectStep {
     resultGeneration: row.result_generation,
     resultSource: row.result_source,
     rowVersion: row.row_version,
+    startedGeneration: row.started_generation,
+    startedAt: row.started_at,
+    attemptCount: row.attempt_count,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     dependsOn,

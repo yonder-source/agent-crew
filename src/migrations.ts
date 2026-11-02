@@ -230,4 +230,17 @@ export const controllerMigrations: Migration[] = [
       `);
     },
   },
+  {
+    version: 5,
+    name: 'effect-step-start-claims',
+    up: (database: Database.Database) => {
+      database.exec(`
+        ALTER TABLE effect_steps
+        ADD COLUMN started_generation INTEGER CHECK (started_generation IS NULL OR started_generation > 0);
+        ALTER TABLE effect_steps ADD COLUMN started_at TEXT;
+        ALTER TABLE effect_steps
+        ADD COLUMN attempt_count INTEGER NOT NULL DEFAULT 0 CHECK (attempt_count >= 0);
+      `);
+    },
+  },
 ];
