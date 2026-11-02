@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { createEffectInput, createJob, createStateFixture } from './state-fixture.js';
+import { createEffectInput, createJob, createStateFixture, prepareExecutionStartEvidence } from './state-fixture.js';
 import { StateError } from './state-common.js';
 import { WriterCoordinator } from './writer.js';
 
@@ -49,9 +49,16 @@ for (const lifecycle of ['starting', 'stopping', 'terminal'] as const) {
       fixture.effects.begin(createEffectInput(fixture, 'operation-1', {
         executionId: execution.executionId, expectedExecutionVersion: execution.rowVersion,
       }));
+      const startEvidence = lifecycle === 'starting'
+        ? prepareExecutionStartEvidence(fixture, job.repositoryId, job.issueId, job.scopeRevisionId)
+        : undefined;
       const changed = fixture.executions.transition({
         executionId: execution.executionId, expectedVersion: execution.rowVersion, writerGeneration: 1,
         lifecycle, ...(lifecycle === 'terminal' ? { terminalOutcome: 'cancelled' } : {}),
+        ...(startEvidence ? {
+          expectedIssueHeadVersion: startEvidence.issueHeadVersion,
+          expectedReadinessHeadVersion: startEvidence.readinessHeadVersion,
+        } : {}),
       });
       assert.equal(fixture.effects.claimStepStart('operation-1', 'operation-1-write', 1), false);
       assert.equal(fixture.effects.get('operation-1')?.steps[0]?.attemptCount, 0);

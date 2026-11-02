@@ -56,8 +56,9 @@ remains the sole workflow-state writer.
 | Module | Operations | Responsibilities |
 | --- | --- | --- |
 | Repository configuration | Save, validate, activate and inspect revisions | Routing, secret references and configuration verification |
-| Requirements | Read and update issues, record agreement and detect changes | Template versions, scope revisions, write receipts and edit conflicts |
-| Job lifecycle | Admit, inspect, answer questions, pause, resume, cancel and retry | Job claims, ownership generations, permissions, capacity and budgets |
+| Requirements | Read and update issues, record agreement and detect changes | Template versions, scope revisions, durable write preflight/readback, receipts and edit conflicts |
+| Issue admission | Periodically discover issues, observe readiness, verify approval/native dependencies and reserve work | Immutable scope and approval evidence, authorized prerequisite confirmations, idempotent decisions, one job and one live execution |
+| Job lifecycle | Inspect, answer questions, pause, resume, cancel and retry | Ownership generations, permissions, capacity and budgets |
 | Runtime supervision | Start, inspect, stop, preserve, restore and clean up | Swarm identity and placement, readiness, active-time enforcement and artifacts |
 | Publication | Validate candidates, publish and inspect results | Source export, base revision, branch and PR bindings, checks and candidate approvals |
 | Effect delivery | Record intent, execute, reconcile and report | Durable queue, operation identity, bounded retries and receipts |

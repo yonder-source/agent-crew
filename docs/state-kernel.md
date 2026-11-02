@@ -28,7 +28,49 @@ age and PID absence alone never authorize replacement.
 - `JobStore` creates one stable job per repository and issue, applies
   row-version-fenced phase/control/scope updates, and records blockers.
 - `ExecutionStore` reserves at most one live execution per job, enforces the
-  lifecycle and ownership generation, and stores versioned cumulative usage.
+  lifecycle and ownership generation, rechecks current issue/readiness heads
+  before moving a reserved execution to `starting`, and stores versioned
+  cumulative usage.
+- `IssueScopeStore` records immutable title/body/native-dependency snapshots
+  with template and policy versions. Read observations are append-only and use
+  an expected-head version so delayed provider polls cannot replace a newer
+  accepted observation. Writer health uses the Controller clock, while provider
+  observation times remain evidence. Complete but unattributable provider
+  snapshots retain their exact content without creating a trusted scope
+  revision; an authorized human confirmation records authority evidence before
+  linking that content to a new scope revision.
+- `ReadinessEvidenceStore` records GitHub label-event and Slack approval/label
+  write receipts separately, bound to the exact issue scope and authority
+  evidence.
+- `AdmissionStore` records current readiness observations and immutable
+  admission outcomes. It checks issue/readiness head versions, revision-bound
+  approvals, authority, native dependency completion evidence, cycles and
+  repository capacity, matches the current readiness actor to approval evidence
+  and orders evidence by durable append order rather than provider timestamps,
+  then creates the job and reserved execution in one immediate transaction. A
+  repeated decision identity replays only when its arguments match. Rejected
+  stale or unhealthy intake mutations are retained in append-only
+  `intake_rejection_events`, including requests made before a job exists.
+  `stale / approval_revision_stale` means the current issue revision is known
+  and differs from a single readiness approval, so fresh approval is required
+  for that revision. `blocked / readiness_evidence_conflict` means multiple
+  readiness sources or the current readiness actor disagree about repository,
+  revision or approver; the evidence is contradictory, so an authorized human
+  must resolve it before admission. Do not downgrade contradictory evidence to
+  ordinary staleness.
+- `AdmissionDiscovery` polls through a provider interface, records issue,
+  readiness and approval evidence, accepts dependencies only from the provider's
+  native GitHub `blocked_by` read, and sends current evidence through atomic
+  admission. Non-coding prerequisite proofs are loaded from current, authorized
+  `PrerequisiteConfirmationStore` records.
+- `GitHubBlockedByReader` reads the repository's native blocked-by graph from
+  GitHub's REST API with a short-lived installation token, checks each returned
+  issue's repository binding and fails closed when the graph exceeds its limit.
+- `CollaborativeIssueWriteCoordinator` persists preflight, title/body writes,
+  each native dependency change and final readback as separate effect steps.
+  It updates the retained scope revision and job binding only after the remote
+  snapshot matches the agreed proposal. Uncertain results stay in the effect
+  ledger for reconciliation.
 - `EffectStore.begin` persists an operation identity, argument fingerprint,
   target, expected job/execution/scope/policy versions, authorization evidence,
   step identities and the intent audit event in one transaction. The caller
@@ -73,7 +115,7 @@ unfiltered request bodies in audit payloads.
 ## Migrations and checks
 
 Add ordered schema changes to `controllerMigrations` in `src/migrations.ts`.
-Do not edit an applied migration; add the next version and cover rollback,
+Do not edit an applied migration; add the next version and cover upgrade,
 reopen and constraint behavior in temporary-database tests. `openDatabase`
 verifies WAL mode, `synchronous=FULL`, foreign keys and the busy timeout before
 applying migrations.

@@ -8,6 +8,8 @@ import { EffectStore } from './effects.js';
 import { EffectResultStore } from './effect-results.js';
 import type { BeginEffectInput } from './effect-model.js';
 import { JobStore } from './jobs.js';
+import { AdmissionStore } from './admission.js';
+import { IssueScopeStore } from './issue-scopes.js';
 import { StateContext } from './state-common.js';
 
 export type StateFixture = {
@@ -18,6 +20,7 @@ export type StateFixture = {
   executions: ExecutionStore;
   effects: EffectStore;
   effectResults: EffectResultStore;
+  state: StateContext;
   close: () => void;
 };
 
@@ -42,6 +45,7 @@ export function createStateFixture(): StateFixture {
     executions: new ExecutionStore(state),
     effects,
     effectResults: new EffectResultStore(state, effects),
+    state,
     close: () => {
       database.close();
       rmSync(directory, { recursive: true, force: true });
@@ -58,6 +62,20 @@ export function createJob(jobs: JobStore) {
     phase: 'queued',
     writerGeneration: 1,
   });
+}
+
+export function prepareExecutionStartEvidence(fixture: StateFixture, repositoryId: string, issueId: string, scopeRevisionId: string) {
+  const observedAt = new Date().toISOString();
+  new IssueScopeStore(fixture.state).recordCompleteRead({
+    observationId: `start-issue-read-${issueId}`, scopeRevisionId, repositoryId, issueId,
+    sourceRevisionId: `provider-${issueId}`, title: 'Task', body: 'Accepted scope', dependencyIssueIds: [],
+    templateVersion: '1', policyVersion: 'policy-1', observedAt, expectedHeadVersion: 0, writerGeneration: 1,
+  });
+  const readiness = new AdmissionStore(fixture.state).recordReadinessObservation({
+    observationId: `start-readiness-read-${issueId}`, repositoryId, issueId,
+    labelPresent: true, complete: true, observedAt, expectedHeadVersion: 0, writerGeneration: 1,
+  });
+  return { issueHeadVersion: 1, readinessHeadVersion: readiness.headVersion };
 }
 
 export function createEffectInput(

@@ -1,0 +1,45 @@
+name: Agent task (v1)
+description: Describe a task for Agent Crew to clarify and implement.
+title: "[Agent task] "
+body:
+  - type: textarea
+    id: user_outcome
+    attributes:
+      label: User outcome and current behavior
+      description: What should improve, and what happens today?
+
+  - type: textarea
+    id: repository_branch
+    attributes:
+      label: Repository and branch contract
+      description: Identify the repository and any branch or base requirements.
+
+  - type: textarea
+    id: required_behavior
+    attributes:
+      label: Required behavior and edge cases
+      description: Describe expected behavior and cases the implementation must handle.
+
+  - type: textarea
+    id: scope
+    attributes:
+      label: Allowed scope and non-goals
+      description: State what may change and what must stay out of scope.
+
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance and verification
+      description: Explain how a reviewer can verify the result.
+
+  - type: textarea
+    id: execution
+    attributes:
+      label: Execution decisions and stop conditions
+      description: Include constraints, decisions, or conditions that should stop work.
+
+  - type: textarea
+    id: delivery
+    attributes:
+      label: Delivery contract
+      description: Describe the expected pull request and handoff.
