@@ -51,6 +51,13 @@ age and PID absence alone never authorize replacement.
   repeated decision identity replays only when its arguments match. Rejected
   stale or unhealthy intake mutations are retained in append-only
   `intake_rejection_events`, including requests made before a job exists.
+  `stale / approval_revision_stale` means the current issue revision is known
+  and differs from a single readiness approval, so fresh approval is required
+  for that revision. `blocked / readiness_evidence_conflict` means multiple
+  readiness sources or the current readiness actor disagree about repository,
+  revision or approver; the evidence is contradictory, so an authorized human
+  must resolve it before admission. Do not downgrade contradictory evidence to
+  ordinary staleness.
 - `AdmissionDiscovery` polls through a provider interface, records issue,
   readiness and approval evidence, accepts dependencies only from the provider's
   native GitHub `blocked_by` read, and sends current evidence through atomic

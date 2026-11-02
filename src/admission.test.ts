@@ -622,6 +622,7 @@ test("requires both readiness sources to agree and records the blocker", () => {
 			writerGeneration: 1,
 		});
 		const result = admission.admit(input());
+		assert.equal(result.outcome, "blocked");
 		assert.equal(result.reasonCode, "readiness_evidence_conflict");
 		assert.equal(
 			(
