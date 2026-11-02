@@ -1,6 +1,7 @@
 import { mkdirSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import Database from 'better-sqlite3';
+import { controllerMigrations } from './migrations.js';
 
 export type Migration = {
   version: number;
@@ -28,11 +29,28 @@ export function openDatabase(path: string, options: DatabaseOptions = {}): Datab
     database.pragma('synchronous = FULL');
     database.pragma('foreign_keys = ON');
     database.pragma(`busy_timeout = ${options.timeoutMs ?? 5_000}`);
-    runMigrations(database, [{ version: 1, name: 'controller-foundation', up: () => undefined }]);
+    verifyDatabaseSettings(database, databasePath, options.timeoutMs ?? 5_000);
+    runMigrations(database, controllerMigrations);
     return database;
   } catch (error) {
     database.close();
     throw error;
+  }
+}
+
+function verifyDatabaseSettings(
+  database: Database.Database,
+  databasePath: string,
+  timeoutMs: number,
+): void {
+  const journalMode = database.pragma('journal_mode', { simple: true });
+  const synchronous = database.pragma('synchronous', { simple: true });
+  const foreignKeys = database.pragma('foreign_keys', { simple: true });
+  const busyTimeout = database.pragma('busy_timeout', { simple: true });
+  const expectedJournalMode = databasePath === ':memory:' ? 'memory' : 'wal';
+
+  if (journalMode !== expectedJournalMode || synchronous !== 2 || foreignKeys !== 1 || busyTimeout !== timeoutMs) {
+    throw new Error('SQLite connection settings do not match the durable state contract');
   }
 }
 

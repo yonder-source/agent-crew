@@ -27,10 +27,14 @@ uses `HOST`, `PORT`, `DATABASE_PATH`, `LOCK_PATH` and `LOG_LEVEL`; see
 process lifetime so only one Controller can write the database. This foundation
 does not require GitHub, Slack or model credentials.
 
-Run the source checks in the same pinned Node image:
+The durable job, execution, writer and effect contracts are documented in
+[the state kernel guide](docs/state-kernel.md).
+
+Run the source checks in the pinned Docker image:
 
 ```sh
-docker run --rm --user "$(id -u):$(id -g)" -v "$PWD:/workspace" -w /workspace node:22.23.1-bookworm-slim sh -lc 'npm ci && npm run check'
+docker build -f Dockerfile.check -t agent-crew-check:local .
+docker run --rm agent-crew-check:local
 ```
 
 Licensed under the [MIT License](LICENSE).

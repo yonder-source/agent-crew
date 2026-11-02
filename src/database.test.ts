@@ -12,14 +12,32 @@ test('initializes an empty database and safely reopens it', () => {
 
   try {
     const first = openDatabase(path);
-    assert.equal(getSchemaVersion(first), 1);
+    assert.equal(getSchemaVersion(first), 5);
     assert.equal(first.pragma('journal_mode', { simple: true }), 'wal');
     assert.equal(first.pragma('synchronous', { simple: true }), 2);
+    assert.equal(first.pragma('busy_timeout', { simple: true }), 5_000);
+    assert.equal(first.pragma('foreign_keys', { simple: true }), 1);
     first.close();
 
     const second = openDatabase(path);
-    assert.equal(getSchemaVersion(second), 1);
+    assert.equal(getSchemaVersion(second), 5);
     second.close();
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test('verifies required SQLite durability and constraint settings on open', () => {
+  const directory = mkdtempSync(join(tmpdir(), 'agent-crew-db-settings-'));
+  const path = join(directory, 'controller.sqlite');
+
+  try {
+    const database = openDatabase(path, { timeoutMs: 750 });
+    assert.equal(database.pragma('journal_mode', { simple: true }), 'wal');
+    assert.equal(database.pragma('synchronous', { simple: true }), 2);
+    assert.equal(database.pragma('foreign_keys', { simple: true }), 1);
+    assert.equal(database.pragma('busy_timeout', { simple: true }), 750);
+    database.close();
   } finally {
     rmSync(directory, { recursive: true, force: true });
   }
