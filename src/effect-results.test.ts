@@ -92,6 +92,30 @@ test('requeues confirmed safe failures with the same step identity and preserved
   }
 });
 
+test('keeps an operation pending while a failed step blocks its dependent', () => {
+  const fixture = createStateFixture();
+  try {
+    const job = createJob(fixture.jobs);
+    fixture.effects.begin(beginInput(job.jobId));
+    assert.equal(fixture.effects.claimStepStart('operation-1', 'step-write', 1), true);
+    fixture.effectResults.recordResult({
+      operationId: 'operation-1',
+      stepId: 'step-write',
+      expectedStepVersion: 2,
+      status: 'confirmed_failure',
+      result: { applied: false },
+      resultGeneration: 1,
+      resultSource: 'provider_receipt',
+      writerGeneration: 1,
+    });
+
+    assert.equal(fixture.effects.get('operation-1')?.operation.status, 'pending');
+    assert.equal(fixture.effects.claimStepStart('operation-1', 'step-readback', 1), false);
+  } finally {
+    fixture.close();
+  }
+});
+
 test('recovers unknown results and keeps an old receipt as history only', () => {
   const fixture = createStateFixture();
   try {

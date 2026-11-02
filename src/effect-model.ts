@@ -258,7 +258,7 @@ export function mapAudit(row: RawAuditEvent): EffectAuditEvent {
 
 export function outcomeFor(steps: EffectOutcome[]): EffectOutcome {
   if (steps.includes('unknown')) return 'unknown';
-  if (steps.includes('confirmed_failure')) return 'confirmed_failure';
   if (steps.includes('pending')) return 'pending';
+  if (steps.includes('confirmed_failure')) return 'confirmed_failure';
   return 'confirmed_success';
 }
