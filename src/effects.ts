@@ -119,6 +119,9 @@ export class EffectStore {
         ) {
           throw new StateError('STALE_GENERATION', 'Effect execution binding or ownership is stale');
         }
+        if (execution.lifecycle === 'stopping' || execution.lifecycle === 'terminal') {
+          throw new StateError('EXECUTION_NOT_ELIGIBLE', 'Execution no longer permits new effects');
+        }
       }
 
       this.state.database.prepare(`
@@ -248,23 +251,52 @@ export class EffectStore {
     return this.state.runWithStaleAudit(owner.job_id, writerGeneration, occurredAt, 'effect_start', () => {
       this.state.assertWriter(writerGeneration, occurredAt);
       const step = this.state.database.prepare(`
-        SELECT step.*, operation.job_id, operation.writer_generation, operation.scope_revision_id
+        SELECT step.*, operation.job_id, operation.writer_generation, operation.scope_revision_id,
+          operation.execution_id, operation.expected_execution_version
         FROM effect_steps step JOIN effect_operations operation USING (operation_id)
         WHERE step.operation_id = ? AND step.step_id = ?
       `).get(operationId, stepId) as (
-        RawStep & { job_id: string; writer_generation: number; scope_revision_id: string }
+        RawStep & Pick<RawOperation, 'job_id' | 'writer_generation' | 'scope_revision_id'
+          | 'execution_id' | 'expected_execution_version'>
       ) | undefined;
       if (
         step?.status !== 'pending'
         || step.started_at !== null
         || step.writer_generation !== writerGeneration
       ) return false;
-      if (this.state.getJobOrThrow(step.job_id).scope_revision_id !== step.scope_revision_id) {
+      const job = this.state.getJobOrThrow(step.job_id);
+      if (job.requested_control !== 'run') {
+        this.audit.append(operationId, 'effect_step_start_rejected_job_control', {
+          stepId,
+          requestedControl: job.requested_control,
+        }, writerGeneration, occurredAt);
+        return false;
+      }
+      if (job.scope_revision_id !== step.scope_revision_id) {
         this.audit.append(operationId, 'effect_step_start_rejected_stale_scope', {
           stepId,
           expectedScopeRevisionId: step.scope_revision_id,
         }, writerGeneration, occurredAt);
         return false;
+      }
+      if (step.execution_id !== null) {
+        const execution = this.state.getExecutionOrThrow(step.execution_id);
+        if (
+          execution.job_id !== job.job_id
+          || execution.ownership_generation !== writerGeneration
+          || execution.row_version !== step.expected_execution_version
+          || execution.lifecycle === 'stopping'
+          || execution.lifecycle === 'terminal'
+        ) {
+          this.audit.append(operationId, 'effect_step_start_rejected_execution', {
+            stepId,
+            executionId: execution.execution_id,
+            ownershipGeneration: execution.ownership_generation,
+            executionVersion: execution.row_version,
+            lifecycle: execution.lifecycle,
+          }, writerGeneration, occurredAt);
+          return false;
+        }
       }
       const blockedDependency = this.state.database.prepare(`
         SELECT 1 AS blocked
@@ -285,7 +317,6 @@ export class EffectStore {
         stepVersion: step.row_version + 1,
         attemptCount: step.attempt_count + 1,
       }, writerGeneration, occurredAt);
-      const job = this.state.getJobOrThrow(step.job_id);
       const nextJobVersion = job.row_version + 1;
       const nextSequence = job.event_sequence + 1;
       this.state.bumpJob(job, nextJobVersion, nextSequence, occurredAt);
