@@ -5,6 +5,11 @@ import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import test from 'node:test';
+import Database from 'better-sqlite3';
+import { openDatabase } from './database.js';
+import { EffectStore } from './effects.js';
+import { JobStore } from './jobs.js';
+import { StateContext } from './state-common.js';
 
 async function unusedPort(): Promise<number> {
   const server = createServer();
@@ -52,6 +57,39 @@ test('flock prevents a second writer and allows restart with a higher generation
     LOCK_PATH: join(directory, 'controller.lock'),
     LOG_LEVEL: 'silent',
   };
+  const database = openDatabase(environment.DATABASE_PATH);
+  const seededAt = new Date().toISOString();
+  database.prepare(`
+    UPDATE controller_writer SET generation = 1, status = 'healthy', heartbeat_at = ?, updated_at = ?
+    WHERE singleton_id = 1
+  `).run(seededAt, seededAt);
+  const state = new StateContext(database);
+  const job = new JobStore(state).create({
+    jobId: 'job-recovery',
+    repositoryId: 'repo-1',
+    issueId: 'issue-1',
+    scopeRevisionId: 'scope-1',
+    phase: 'queued',
+    writerGeneration: 1,
+  });
+  new EffectStore(state).begin({
+    operationId: 'operation-recovery',
+    jobId: job.jobId,
+    operationKind: 'github_issue_update',
+    arguments: { title: 'Accepted title' },
+    target: { issueId: 'issue-1' },
+    expectedJobVersion: job.rowVersion,
+    scopeRevisionId: 'scope-1',
+    policyVersion: 'policy-1',
+    callerIdentity: 'human:123',
+    grant: { action: 'issue.write' },
+    steps: [{ stepId: 'step-recovery', stepKey: 'write', target: { title: 'Accepted title' } }],
+    writerGeneration: 1,
+  });
+  database.prepare(`
+    UPDATE controller_writer SET status = 'stopped', updated_at = ? WHERE singleton_id = 1
+  `).run(seededAt);
+  database.close();
   const start = (): ChildProcess => spawn(process.execPath, ['scripts/start.mjs'], {
     cwd: resolve('.'),
     env: environment,
@@ -63,11 +101,16 @@ test('flock prevents a second writer and allows restart with a higher generation
   try {
     first = start();
     const firstHealth = await waitForHealth(address);
-    assert.equal(firstHealth.writerGeneration, 1);
+    assert.equal(firstHealth.writerGeneration, 2);
+    const recovered = new Database(environment.DATABASE_PATH, { readonly: true });
+    assert.equal((recovered.prepare(
+      'SELECT status FROM effect_steps WHERE step_id = ?',
+    ).get('step-recovery') as { status: string }).status, 'unknown');
+    recovered.close();
 
     const competing = start();
     assert.equal(await waitForExit(competing), 75);
-    assert.equal((await waitForHealth(address)).writerGeneration, 1);
+    assert.equal((await waitForHealth(address)).writerGeneration, 2);
 
     const firstExit = waitForExit(first);
     first.kill('SIGTERM');
@@ -76,8 +119,13 @@ test('flock prevents a second writer and allows restart with a higher generation
 
     replacement = start();
     const replacementHealth = await waitForHealth(address);
-    assert.equal(replacementHealth.writerGeneration, 2);
+    assert.equal(replacementHealth.writerGeneration, 3);
     assert.equal(replacementHealth.writerStatus, 'healthy');
+    const stillUnknown = new Database(environment.DATABASE_PATH, { readonly: true });
+    assert.equal((stillUnknown.prepare(
+      'SELECT status FROM effect_steps WHERE step_id = ?',
+    ).get('step-recovery') as { status: string }).status, 'unknown');
+    stillUnknown.close();
   } finally {
     for (const child of [first, replacement]) {
       if (child && child.exitCode === null && child.signalCode === null) child.kill('SIGTERM');

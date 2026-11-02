@@ -24,7 +24,7 @@ export class WriterCoordinator {
 
   static async start(
     database: Database.Database,
-    recover: () => void | Promise<void> = () => undefined,
+    recover: (generation: number) => void | Promise<void> = () => undefined,
     now: () => Date = () => new Date(),
     heartbeatIntervalMs = HEARTBEAT_INTERVAL_MS,
   ): Promise<WriterCoordinator> {
@@ -44,7 +44,7 @@ export class WriterCoordinator {
 
     const coordinator = new WriterCoordinator(database, generation, now);
     try {
-      await recover();
+      await recover(generation);
       coordinator.markHealthy();
       coordinator.heartbeatTimer = setInterval(() => coordinator.heartbeat(), heartbeatIntervalMs);
       coordinator.heartbeatTimer.unref();

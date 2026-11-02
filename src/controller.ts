@@ -2,6 +2,9 @@ import { createServer, type Server } from 'node:http';
 import pino, { type Logger } from 'pino';
 import type { ControllerConfig } from './config.js';
 import { getSchemaVersion, openDatabase } from './database.js';
+import { EffectResultStore } from './effect-results.js';
+import { EffectStore } from './effects.js';
+import { StateContext } from './state-common.js';
 import { WriterCoordinator } from './writer.js';
 
 export type RunningController = {
@@ -22,7 +25,10 @@ export async function startController(
   const schemaVersion = getSchemaVersion(database);
   let writer: WriterCoordinator;
   try {
-    writer = await WriterCoordinator.start(database);
+    writer = await WriterCoordinator.start(database, (generation) => {
+      const state = new StateContext(database);
+      new EffectResultStore(state, new EffectStore(state)).recoverPendingSteps(generation);
+    });
   } catch (error) {
     database.close();
     throw error;
