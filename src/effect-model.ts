@@ -14,6 +14,7 @@ export type BeginEffectInput = {
   operationId: string;
   jobId: string;
   executionId?: string;
+  replacementForOperationId?: string;
   operationKind: string;
   arguments: unknown;
   target: unknown;
@@ -31,6 +32,7 @@ export type EffectOperation = {
   operationId: string;
   jobId: string;
   executionId: string | null;
+  replacementForOperationId: string | null;
   operationKind: string;
   argumentFingerprint: string;
   targetJson: string;
@@ -88,6 +90,7 @@ export type RawOperation = {
   operation_id: string;
   job_id: string;
   execution_id: string | null;
+  replacement_for_operation_id: string | null;
   operation_kind: string;
   argument_fingerprint: string;
   target_json: string;
@@ -183,6 +186,7 @@ export function mapOperation(row: RawOperation): EffectOperation {
     operationId: row.operation_id,
     jobId: row.job_id,
     executionId: row.execution_id,
+    replacementForOperationId: row.replacement_for_operation_id,
     operationKind: row.operation_kind,
     argumentFingerprint: row.argument_fingerprint,
     targetJson: row.target_json,

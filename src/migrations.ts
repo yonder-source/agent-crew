@@ -220,4 +220,14 @@ export const controllerMigrations: Migration[] = [
       `);
     },
   },
+  {
+    version: 4,
+    name: 'effect-operation-replacement-link',
+    up: (database: Database.Database) => {
+      database.exec(`
+        ALTER TABLE effect_operations
+        ADD COLUMN replacement_for_operation_id TEXT REFERENCES effect_operations(operation_id);
+      `);
+    },
+  },
 ];

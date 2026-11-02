@@ -12,7 +12,7 @@ test('initializes an empty database and safely reopens it', () => {
 
   try {
     const first = openDatabase(path);
-    assert.equal(getSchemaVersion(first), 3);
+    assert.equal(getSchemaVersion(first), 4);
     assert.equal(first.pragma('journal_mode', { simple: true }), 'wal');
     assert.equal(first.pragma('synchronous', { simple: true }), 2);
     assert.equal(first.pragma('busy_timeout', { simple: true }), 5_000);
@@ -20,7 +20,7 @@ test('initializes an empty database and safely reopens it', () => {
     first.close();
 
     const second = openDatabase(path);
-    assert.equal(getSchemaVersion(second), 3);
+    assert.equal(getSchemaVersion(second), 4);
     second.close();
   } finally {
     rmSync(directory, { recursive: true, force: true });
