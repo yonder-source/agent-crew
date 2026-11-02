@@ -61,14 +61,14 @@ export class EffectStore {
           'SELECT * FROM effect_authorization_evidence WHERE operation_id = ?',
         ).get(input.operationId) as RawAuthorization;
         if (this.matches(existing, authorization, input, argumentFingerprint, targetJson, grantJson, steps)) {
-          return { duplicate: true, conflict: false };
+          return { duplicate: true, conflict: false, blocked: false };
         }
         this.appendAudit(input.operationId, 'operation_identity_conflict', {
           attemptedArgumentFingerprint: argumentFingerprint,
           attemptedOperationKind: input.operationKind,
           attemptedTarget: targetJson,
         }, input.writerGeneration, occurredAt);
-        return { duplicate: false, conflict: true };
+        return { duplicate: false, conflict: true, blocked: false };
       }
 
       const job = this.state.getJobOrThrow(input.jobId);
@@ -77,6 +77,33 @@ export class EffectStore {
       }
       if (job.scope_revision_id !== input.scopeRevisionId) {
         throw new StateError('STALE_SCOPE_REVISION', 'Effect scope does not match the current job scope');
+      }
+      const unresolved = this.state.database.prepare(`
+        SELECT operation_id, job_id FROM effect_operations
+        WHERE operation_kind = ? AND target_json = ? AND status = 'unknown'
+        ORDER BY created_at, operation_id
+      `).all(input.operationKind, targetJson) as Array<{ operation_id: string; job_id: string }>;
+      const replacementIsExplicit = input.replacementForOperationId !== undefined
+        && unresolved.length === 1
+        && unresolved[0]?.operation_id === input.replacementForOperationId
+        && unresolved[0]?.job_id === input.jobId;
+      const blockedByUnknown = (unresolved.length > 0 && !replacementIsExplicit)
+        || (input.replacementForOperationId !== undefined && !replacementIsExplicit);
+      if (blockedByUnknown) {
+        const blockedOperationId = unresolved[0]?.operation_id ?? input.replacementForOperationId;
+        if (blockedOperationId) {
+          const existingBlocked = this.state.database.prepare(
+            'SELECT 1 AS found FROM effect_operations WHERE operation_id = ?',
+          ).get(blockedOperationId);
+          if (existingBlocked) {
+            this.appendAudit(blockedOperationId, 'unknown_effect_duplicate_blocked', {
+              attemptedOperationId: input.operationId,
+              attemptedArgumentFingerprint: argumentFingerprint,
+              replacementForOperationId: input.replacementForOperationId ?? null,
+            }, input.writerGeneration, occurredAt);
+          }
+        }
+        return { duplicate: false, conflict: false, blocked: true };
       }
       let execution: RawExecution | undefined;
       if (input.executionId) {
@@ -92,14 +119,16 @@ export class EffectStore {
 
       this.state.database.prepare(`
         INSERT INTO effect_operations (
-          operation_id, job_id, execution_id, operation_kind, argument_fingerprint, target_json,
+          operation_id, job_id, execution_id, replacement_for_operation_id,
+          operation_kind, argument_fingerprint, target_json,
           expected_job_version, expected_execution_version, scope_revision_id, policy_version,
           writer_generation, status, row_version, event_sequence, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', 1, 1, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', 1, 1, ?, ?)
       `).run(
         input.operationId,
         input.jobId,
         input.executionId ?? null,
+        input.replacementForOperationId ?? null,
         input.operationKind,
         argumentFingerprint,
         targetJson,
@@ -160,10 +189,11 @@ export class EffectStore {
         writerGeneration: input.writerGeneration,
         occurredAt,
       });
-      return { duplicate: false, conflict: false };
+      return { duplicate: false, conflict: false, blocked: false };
     }).immediate();
 
     if (result.conflict) throw new StateError('OPERATION_ID_CONFLICT', 'Operation identity was reused with changed command or authorization data');
+    if (result.blocked) throw new StateError('UNKNOWN_EFFECT_BLOCKS_DUPLICATE', 'An unknown effect must be reconciled or explicitly replaced before a matching action can start');
     return { view: this.get(input.operationId) as EffectOperationView, duplicate: result.duplicate };
   }
 
@@ -274,6 +304,7 @@ export class EffectStore {
     if (
       existing.job_id !== input.jobId
       || existing.execution_id !== (input.executionId ?? null)
+      || existing.replacement_for_operation_id !== (input.replacementForOperationId ?? null)
       || existing.operation_kind !== input.operationKind
       || existing.argument_fingerprint !== fingerprint
       || existing.target_json !== targetJson

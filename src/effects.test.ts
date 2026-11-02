@@ -1,11 +1,12 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import type { BeginEffectInput } from './effect-model.js';
 import { EffectStore } from './effects.js';
 import { StateError } from './state-common.js';
 import { StateContext } from './state-common.js';
 import { createJob, createStateFixture } from './state-fixture.js';
 
-function beginInput(jobId: string) {
+function beginInput(jobId: string): BeginEffectInput {
   return {
     operationId: 'operation-1',
     jobId,
@@ -55,6 +56,46 @@ test('deduplicates identical operation identities and audits changed arguments',
     assert.throws(() => fixture.database.prepare(
       'UPDATE effect_authorization_evidence SET caller_identity = ? WHERE operation_id = ?',
     ).run('human:changed', 'operation-1'), /immutable/);
+  } finally {
+    fixture.close();
+  }
+});
+
+test('blocks a new matching operation until it explicitly replaces an unknown one', () => {
+  const fixture = createStateFixture();
+  try {
+    const job = createJob(fixture.jobs);
+    const effects = new EffectStore(new StateContext(fixture.database));
+    effects.begin(beginInput(job.jobId));
+    fixture.effectResults.recordResult({
+      operationId: 'operation-1',
+      stepId: 'step-write',
+      expectedStepVersion: 1,
+      status: 'unknown',
+      result: { delivery: 'response_lost' },
+      resultGeneration: 1,
+      resultSource: 'provider_receipt',
+      writerGeneration: 1,
+    });
+
+    const replacement = beginInput(job.jobId);
+    replacement.operationId = 'operation-2';
+    replacement.expectedJobVersion = 3;
+    replacement.steps = replacement.steps.map((step) => ({
+      ...step,
+      stepId: `${step.stepId}-replacement`,
+    }));
+    assert.throws(() => effects.begin(replacement), (error: unknown) => (
+      error instanceof StateError && error.code === 'UNKNOWN_EFFECT_BLOCKS_DUPLICATE'
+    ));
+    assert.equal(effects.listAudit('operation-1').at(-1)?.eventType, 'unknown_effect_duplicate_blocked');
+
+    replacement.replacementForOperationId = 'operation-1';
+    replacement.callerIdentity = 'human:456';
+    replacement.grant = { action: 'issue.write', replacementApproved: true };
+    const accepted = effects.begin(replacement);
+    assert.equal(accepted.view.operation.replacementForOperationId, 'operation-1');
+    assert.equal(accepted.view.authorization.callerIdentity, 'human:456');
   } finally {
     fixture.close();
   }

@@ -36,6 +36,9 @@ age and PID absence alone never authorize replacement.
   confirmed successful. An identical operation identity and command return
   the existing state. Changed command or authorization data under the same
   identity is audited and rejected.
+- A matching action remains blocked while an earlier operation is unknown.
+  Replacing it requires a new operation identity, a fresh authorization record
+  and a `replacementForOperationId` link to the single unknown operation.
 - `EffectResultStore.recordResult` records a provider receipt or reconciliation
   using the expected step version and current writer generation. A late result
   from an older generation is appended to audit history and cannot change the
