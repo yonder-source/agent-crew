@@ -1,6 +1,7 @@
 import { mkdirSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import Database from 'better-sqlite3';
+import { controllerMigrations } from './migrations.js';
 
 export type Migration = {
   version: number;
@@ -28,7 +29,7 @@ export function openDatabase(path: string, options: DatabaseOptions = {}): Datab
     database.pragma('synchronous = FULL');
     database.pragma('foreign_keys = ON');
     database.pragma(`busy_timeout = ${options.timeoutMs ?? 5_000}`);
-    runMigrations(database, [{ version: 1, name: 'controller-foundation', up: () => undefined }]);
+    runMigrations(database, controllerMigrations);
     return database;
   } catch (error) {
     database.close();

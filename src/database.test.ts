@@ -12,13 +12,13 @@ test('initializes an empty database and safely reopens it', () => {
 
   try {
     const first = openDatabase(path);
-    assert.equal(getSchemaVersion(first), 1);
+    assert.equal(getSchemaVersion(first), 2);
     assert.equal(first.pragma('journal_mode', { simple: true }), 'wal');
     assert.equal(first.pragma('synchronous', { simple: true }), 2);
     first.close();
 
     const second = openDatabase(path);
-    assert.equal(getSchemaVersion(second), 1);
+    assert.equal(getSchemaVersion(second), 2);
     second.close();
   } finally {
     rmSync(directory, { recursive: true, force: true });
