@@ -92,6 +92,54 @@ test('requeues confirmed safe failures with the same step identity and preserved
   }
 });
 
+test('retains every receipt when reconciliation replaces an unknown observation', () => {
+  const fixture = createStateFixture();
+  try {
+    const job = createJob(fixture.jobs);
+    fixture.effects.begin(beginInput(job.jobId));
+    fixture.effects.claimStepStart('operation-1', 'step-write', 1);
+    const unknown = fixture.effectResults.recordResult({
+      operationId: 'operation-1',
+      stepId: 'step-write',
+      expectedStepVersion: 2,
+      status: 'unknown',
+      result: { providerRequestId: 'request-1', delivery: 'response_lost' },
+      resultGeneration: 1,
+      resultSource: 'provider_receipt',
+      writerGeneration: 1,
+    });
+    const reconciled = fixture.effectResults.recordResult({
+      operationId: 'operation-1',
+      stepId: 'step-write',
+      expectedStepVersion: unknown.step.rowVersion,
+      status: 'confirmed_success',
+      result: { readbackId: 'verification-1', applied: true },
+      resultGeneration: 1,
+      resultSource: 'reconciliation',
+      writerGeneration: 1,
+    });
+    assert.equal(reconciled.historyOnly, false);
+    const observations = fixture.effects.listAudit('operation-1')
+      .filter((event) => event.eventType === 'effect_result_recorded')
+      .map((event) => JSON.parse(event.payloadJson));
+    assert.equal(observations.length, 2);
+    assert.equal(observations[0].result.providerRequestId, 'request-1');
+    assert.equal(observations[1].result.readbackId, 'verification-1');
+    assert.deepEqual(observations[1].previousObservation, {
+      status: 'unknown',
+      resultGeneration: 1,
+      resultSource: 'provider_receipt',
+      result: { providerRequestId: 'request-1', delivery: 'response_lost' },
+      stepVersion: unknown.step.rowVersion,
+    });
+    assert.throws(() => fixture.database.prepare(
+      'DELETE FROM effect_audit_events WHERE operation_id = ?',
+    ).run('operation-1'), /append-only/);
+  } finally {
+    fixture.close();
+  }
+});
+
 test('keeps an operation pending while a failed step blocks its dependent', () => {
   const fixture = createStateFixture();
   try {

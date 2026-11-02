@@ -112,9 +112,18 @@ export class EffectResultStore {
         `).run(nextStatus, occurredAt, input.operationId);
         this.appendAudit(input.operationId, 'effect_result_recorded', {
           stepId: input.stepId,
+          stepVersion: input.expectedStepVersion + 1,
           status: input.status,
           resultGeneration: input.resultGeneration,
           resultSource: input.resultSource,
+          result: JSON.parse(resultJson) as unknown,
+          previousObservation: step.result_json === null ? null : {
+            status: step.status,
+            resultGeneration: step.result_generation,
+            resultSource: step.result_source,
+            result: JSON.parse(step.result_json) as unknown,
+            stepVersion: step.row_version,
+          },
         }, input.writerGeneration, occurredAt);
         const job = this.state.getJobOrThrow(rawOperation.job_id);
         const nextJobVersion = job.row_version + 1;
