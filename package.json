@@ -1,31 +1,31 @@
 {
-  "name": "agent-crew",
-  "version": "0.1.0",
-  "private": true,
-  "type": "module",
-  "engines": {
-    "node": "22.x"
-  },
-  "scripts": {
-    "clean": "node scripts/clean.mjs",
-    "build": "npm run clean && tsc -p tsconfig.json",
-    "typecheck": "tsc --noEmit -p tsconfig.json",
-    "lint": "biome lint src scripts",
-    "test": "npm run build && node --test dist/config.test.js dist/controller.test.js dist/database.test.js dist/jobs.test.js dist/executions.test.js dist/writer.test.js dist/writer-entrypoint.test.js dist/effects.test.js dist/effect-results.test.js dist/effect-starts.test.js dist/effect-replacements.test.js dist/issue-template.test.js dist/issue-scopes.test.js dist/readiness.test.js dist/admission.test.js",
-    "check": "npm run lint && npm run typecheck && npm test",
-    "start": "node scripts/start.mjs",
-    "dev": "node scripts/start.mjs --import tsx --watch src/main.ts"
-  },
-  "dependencies": {
-    "better-sqlite3": "13.0.3",
-    "pino": "10.4.0",
-    "zod": "4.6.7"
-  },
-  "devDependencies": {
-    "@biomejs/biome": "2.6.4",
-    "@types/better-sqlite3": "9.6.0",
-    "@types/node": "22.20.5",
-    "tsx": "4.23.15",
-    "typescript": "6.0.3"
-  }
+	"name": "agent-crew",
+	"version": "0.1.0",
+	"private": true,
+	"type": "module",
+	"engines": {
+		"node": "22.x"
+	},
+	"scripts": {
+		"clean": "node scripts/clean.mjs",
+		"build": "npm run clean && tsc -p tsconfig.json",
+		"typecheck": "tsc --noEmit -p tsconfig.json",
+		"lint": "biome lint src scripts",
+		"test": "npm run build && node --test dist/config.test.js dist/controller.test.js dist/database.test.js dist/jobs.test.js dist/executions.test.js dist/writer.test.js dist/writer-entrypoint.test.js dist/effects.test.js dist/effect-results.test.js dist/effect-starts.test.js dist/effect-replacements.test.js dist/issue-template.test.js dist/issue-scopes.test.js dist/readiness.test.js dist/admission.test.js dist/discovery.test.js dist/issue-writes.test.js",
+		"check": "npm run lint && npm run typecheck && npm test",
+		"start": "node scripts/start.mjs",
+		"dev": "node scripts/start.mjs --import tsx --watch src/main.ts"
+	},
+	"dependencies": {
+		"better-sqlite3": "13.0.3",
+		"pino": "10.4.0",
+		"zod": "4.6.7"
+	},
+	"devDependencies": {
+		"@biomejs/biome": "2.6.4",
+		"@types/better-sqlite3": "9.6.0",
+		"@types/node": "22.20.5",
+		"tsx": "4.23.15",
+		"typescript": "6.0.3"
+	}
 }
