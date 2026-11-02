@@ -322,13 +322,18 @@ progress. Track execution reservation, start, active, stop and terminal outcome
 with its ownership generation. Store blockers and pending human decisions as
 durable records rather than encoding their details in phase names.
 
-Save human input and effect intent before acknowledging acceptance. Include
-the operation identity, authenticated caller identity, authorization evidence,
-job, execution, scope version and policy version. Record completion
-separately, using a receipt or verification from the external service. Keep
-append-only history and record late results. Give each new authorized action a
-new identity. Track effects as pending, confirmed successful, confirmed failed
-or unknown. Reusing source requires current authorization.
+Save human input and effect intent before acknowledging acceptance. Include the
+stable operation identity, authenticated caller, authorization evidence, bound
+target, argument fingerprint, and expected job, execution, scope and policy
+versions. A command that performs multiple external actions has a stable step
+identity for each effect. Persist accepted intent and audit evidence in one
+transaction before executing effects; execute network and runtime work outside
+transactions, then record completion through a version- and generation-checked
+transaction. Record completion separately, using a receipt or verification from
+the external service. Keep append-only history and record late results. Give each
+new authorized action a new identity. Track effects as pending, confirmed
+successful, confirmed failed or unknown. Reusing source requires current
+authorization.
 
 Atomically assign each accepted job state change a monotonically increasing
 per-job sequence and increment its row version. Provider timestamps and
@@ -367,11 +372,15 @@ status.
   the existing status or result without repeating work. Reject and audit
   changed arguments under the same identity.
 - Retry transient failures of safe reads or operations known not to have
-  started. Use bounded backoff and jitter.
+  started, reusing the same operation and step identities. Use bounded,
+  adapter-specific backoff and jitter; set numeric limits before operational
+  acceptance. Retain identities through the supported replay and recovery window.
 - Permanent refusals block the operation.
 - Reconcile uncertain writes before replay. Unknown outcomes block dependent
   or potentially duplicate actions, including after timeouts or exhausted
-  retries. Independent authorized work may continue.
+  retries. If reconciliation cannot resolve an outcome, require human
+  authorization for a replacement as a new effect. Independent authorized work
+  may continue.
 - Exhausted retries leave the operation blocked with its reason, responsible
   person or service and next action.
 
@@ -516,7 +525,7 @@ Resolve each contract before implementing dependent components.
 | T01 | Admission and initial scope evidence | Settled in R4: human-authorized readiness through GitHub or Slack/Controller, revision-bound approval evidence, native `blocked_by` dependencies, and the missing-scope clarification path. Verify these paths and the readiness-removal/start boundary during implementation. |
 | T02 | Issue writes | Settled in R5 with a known residual risk: preflight/write/readback can overwrite an undetected concurrent edit because atomic conditional updates are unverified. Preserve evidence and route detected conflicts for human resolution; future hardening is provider-supported conditional update or compare-and-swap. |
 | T03 | Persistence and lifecycle | Settled in R8 and ADRs 0002–0003: one installation-wide writer holds a host-local OS lock; 5-second heartbeat with 15-second unhealthy threshold never authorizes takeover. A replacement waits for confirmed process exit and lock release, increments the writer generation, and reconciles in-flight effects. Verify process replacement, restart recovery and stale-generation fencing during implementation. |
-| T04 | External-effect adapters | Schemas for each operation, key scope and retention, argument fingerprints, transactions for intent and audit records, retry budgets and reconciliation evidence |
+| T04 | External-effect adapters | Settled in R8: stable command and per-effect step identities, intent/audit before execution, version-fenced receipts, unknown-outcome reconciliation, and bounded adapter-specific retries. Set numeric limits before operational acceptance; verify provider receipts and reconciliation during implementation. |
 | T05 | Runtime and privilege grants | Pinned OpenClaw and Swarm versions, management UI page integration, runtime placement, tool and network enforcement, service access to secrets and host operations, internal authentication and rotation |
 | T06 | Source and backup recovery | Archive format, capture schedule, encryption, access controls, a consistent database and artifact manifest, and a restore procedure |
 | T07 | Metering and limits | Hook coverage, loop detection and stopping a specific run; usage and burn-rate thresholds, grace periods and active-time accounting |
