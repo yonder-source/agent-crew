@@ -20,7 +20,7 @@ test('serves health and closes its database connection cleanly', async () => {
     assert.equal(response.status, 200);
     assert.deepEqual(await response.json(), {
       status: 'ok',
-      schemaVersion: 2,
+      schemaVersion: 3,
       writerGeneration: 1,
       writerStatus: 'healthy',
     });

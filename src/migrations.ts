@@ -111,4 +111,113 @@ export const controllerMigrations: Migration[] = [
       `);
     },
   },
+  {
+    version: 3,
+    name: 'effect-intent-and-receipts',
+    up: (database: Database.Database) => {
+      database.exec(`
+        CREATE TABLE effect_operations (
+          operation_id TEXT PRIMARY KEY CHECK (length(operation_id) > 0),
+          job_id TEXT NOT NULL REFERENCES jobs(job_id),
+          execution_id TEXT REFERENCES executions(execution_id),
+          operation_kind TEXT NOT NULL CHECK (length(operation_kind) > 0),
+          argument_fingerprint TEXT NOT NULL CHECK (length(argument_fingerprint) = 64),
+          target_json TEXT NOT NULL,
+          expected_job_version INTEGER NOT NULL CHECK (expected_job_version > 0),
+          expected_execution_version INTEGER,
+          scope_revision_id TEXT NOT NULL CHECK (length(scope_revision_id) > 0),
+          policy_version TEXT NOT NULL CHECK (length(policy_version) > 0),
+          writer_generation INTEGER NOT NULL CHECK (writer_generation > 0),
+          status TEXT NOT NULL CHECK (status IN (
+            'pending', 'confirmed_success', 'confirmed_failure', 'unknown'
+          )),
+          row_version INTEGER NOT NULL DEFAULT 1 CHECK (row_version > 0),
+          event_sequence INTEGER NOT NULL DEFAULT 0 CHECK (event_sequence >= 0),
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          CHECK (
+            (execution_id IS NULL AND expected_execution_version IS NULL)
+            OR (execution_id IS NOT NULL AND expected_execution_version > 0)
+          )
+        ) STRICT;
+
+        CREATE TABLE effect_authorization_evidence (
+          operation_id TEXT PRIMARY KEY REFERENCES effect_operations(operation_id),
+          caller_identity TEXT NOT NULL CHECK (length(caller_identity) > 0),
+          grant_json TEXT NOT NULL,
+          target_json TEXT NOT NULL,
+          expected_job_version INTEGER NOT NULL CHECK (expected_job_version > 0),
+          expected_execution_version INTEGER,
+          scope_revision_id TEXT NOT NULL CHECK (length(scope_revision_id) > 0),
+          policy_version TEXT NOT NULL CHECK (length(policy_version) > 0),
+          writer_generation INTEGER NOT NULL CHECK (writer_generation > 0),
+          authorized_at TEXT NOT NULL
+        ) STRICT;
+
+        CREATE TRIGGER effect_authorization_prevent_update
+        BEFORE UPDATE ON effect_authorization_evidence
+        BEGIN
+          SELECT RAISE(ABORT, 'effect authorization evidence is immutable');
+        END;
+
+        CREATE TRIGGER effect_authorization_prevent_delete
+        BEFORE DELETE ON effect_authorization_evidence
+        BEGIN
+          SELECT RAISE(ABORT, 'effect authorization evidence is immutable');
+        END;
+
+        CREATE TABLE effect_steps (
+          step_id TEXT PRIMARY KEY CHECK (length(step_id) > 0),
+          operation_id TEXT NOT NULL REFERENCES effect_operations(operation_id),
+          step_key TEXT NOT NULL CHECK (length(step_key) > 0),
+          target_json TEXT NOT NULL,
+          status TEXT NOT NULL CHECK (status IN (
+            'pending', 'confirmed_success', 'confirmed_failure', 'unknown'
+          )),
+          result_json TEXT,
+          result_generation INTEGER,
+          result_source TEXT CHECK (result_source IN ('provider_receipt', 'reconciliation', 'recovery')),
+          row_version INTEGER NOT NULL DEFAULT 1 CHECK (row_version > 0),
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          UNIQUE (operation_id, step_key),
+          CHECK (
+            (status = 'pending' AND result_json IS NULL AND result_generation IS NULL AND result_source IS NULL)
+            OR (status = 'unknown' AND result_json IS NOT NULL AND result_generation IS NOT NULL AND result_source IS NOT NULL)
+            OR (status IN ('confirmed_success', 'confirmed_failure') AND result_json IS NOT NULL AND result_generation > 0 AND result_source IS NOT NULL)
+          )
+        ) STRICT;
+
+        CREATE TABLE effect_step_dependencies (
+          step_id TEXT NOT NULL REFERENCES effect_steps(step_id),
+          depends_on_step_id TEXT NOT NULL REFERENCES effect_steps(step_id),
+          PRIMARY KEY (step_id, depends_on_step_id),
+          CHECK (step_id <> depends_on_step_id)
+        ) STRICT;
+
+        CREATE TABLE effect_audit_events (
+          event_id INTEGER PRIMARY KEY,
+          operation_id TEXT NOT NULL REFERENCES effect_operations(operation_id),
+          sequence INTEGER NOT NULL CHECK (sequence > 0),
+          event_type TEXT NOT NULL CHECK (length(event_type) > 0),
+          payload_json TEXT NOT NULL,
+          writer_generation INTEGER NOT NULL CHECK (writer_generation > 0),
+          occurred_at TEXT NOT NULL,
+          UNIQUE (operation_id, sequence)
+        ) STRICT;
+
+        CREATE TRIGGER effect_audit_prevent_update
+        BEFORE UPDATE ON effect_audit_events
+        BEGIN
+          SELECT RAISE(ABORT, 'effect audit history is append-only');
+        END;
+
+        CREATE TRIGGER effect_audit_prevent_delete
+        BEFORE DELETE ON effect_audit_events
+        BEGIN
+          SELECT RAISE(ABORT, 'effect audit history is append-only');
+        END;
+      `);
+    },
+  },
 ];
