@@ -103,6 +103,9 @@ rules are defined in [R8](../spec.md#r8-durable-state-and-external-effects).
 Task tools, subprocesses and package scripts share the execution's workspace
 and network permissions. Runtime supervision places and inspects the
 task runtime, verifies termination, and captures or restores source checkpoints.
+The proposed Controller interface and reconciliation contract are documented
+in [Runtime supervisor contract](runtime-supervisor-contract.md); no live
+adapter is enabled before T05 qualification.
 Recovery and cleanup conditions are defined in
 [R10](../spec.md#r10-preservation-operations-and-recovery).
 
