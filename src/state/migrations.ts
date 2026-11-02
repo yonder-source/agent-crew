@@ -707,4 +707,42 @@ export const controllerMigrations: Migration[] = [
       `);
     },
   },
+  {
+    version: 13,
+    name: "candidate-submissions",
+    up: (database: Database.Database) => {
+      database.exec(`
+        CREATE TABLE candidate_submissions (
+          candidate_id TEXT PRIMARY KEY CHECK (length(candidate_id) > 0),
+          job_id TEXT NOT NULL REFERENCES jobs(job_id),
+          execution_id TEXT NOT NULL REFERENCES executions(execution_id),
+          ownership_generation INTEGER NOT NULL CHECK (ownership_generation > 0),
+          repository_id TEXT NOT NULL CHECK (length(repository_id) > 0),
+          issue_id TEXT NOT NULL CHECK (length(issue_id) > 0),
+          scope_revision_id TEXT NOT NULL CHECK (length(scope_revision_id) > 0),
+          policy_version TEXT NOT NULL CHECK (length(policy_version) > 0),
+          source_bundle_id TEXT NOT NULL CHECK (length(source_bundle_id) > 0),
+          base_sha TEXT NOT NULL CHECK (length(base_sha) IN (40, 64)),
+          candidate_sha TEXT NOT NULL CHECK (length(candidate_sha) IN (40, 64)),
+          reported_validation_json TEXT NOT NULL,
+          submitted_at TEXT NOT NULL,
+          UNIQUE (execution_id, candidate_sha)
+        ) STRICT;
+
+        CREATE INDEX candidate_submissions_job_idx
+        ON candidate_submissions (job_id, submitted_at, candidate_id);
+
+        CREATE TRIGGER candidate_submissions_prevent_update
+        BEFORE UPDATE ON candidate_submissions
+        BEGIN
+          SELECT RAISE(ABORT, 'candidate submissions are immutable');
+        END;
+        CREATE TRIGGER candidate_submissions_prevent_delete
+        BEFORE DELETE ON candidate_submissions
+        BEGIN
+          SELECT RAISE(ABORT, 'candidate submissions are immutable');
+        END;
+      `);
+    },
+  },
 ];
