@@ -4,6 +4,8 @@ import { join } from 'node:path';
 import type Database from 'better-sqlite3';
 import { openDatabase } from './database.js';
 import { ExecutionStore } from './executions.js';
+import { EffectStore } from './effects.js';
+import { EffectResultStore } from './effect-results.js';
 import { JobStore } from './jobs.js';
 import { StateContext } from './state-common.js';
 
@@ -13,6 +15,8 @@ export type StateFixture = {
   database: Database.Database;
   jobs: JobStore;
   executions: ExecutionStore;
+  effects: EffectStore;
+  effectResults: EffectResultStore;
   close: () => void;
 };
 
@@ -27,6 +31,7 @@ export function createStateFixture(): StateFixture {
     WHERE singleton_id = 1
   `).run(now, now);
   const state = new StateContext(database);
+  const effects = new EffectStore(state);
 
   return {
     directory,
@@ -34,6 +39,8 @@ export function createStateFixture(): StateFixture {
     database,
     jobs: new JobStore(state),
     executions: new ExecutionStore(state),
+    effects,
+    effectResults: new EffectResultStore(state, effects),
     close: () => {
       database.close();
       rmSync(directory, { recursive: true, force: true });

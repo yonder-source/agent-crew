@@ -11,7 +11,7 @@
     "build": "npm run clean && tsc -p tsconfig.json",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "lint": "biome lint src scripts",
-    "test": "npm run build && node --test dist/config.test.js dist/controller.test.js dist/database.test.js dist/jobs.test.js dist/executions.test.js dist/writer.test.js dist/writer-entrypoint.test.js dist/effects.test.js",
+    "test": "npm run build && node --test dist/config.test.js dist/controller.test.js dist/database.test.js dist/jobs.test.js dist/executions.test.js dist/writer.test.js dist/writer-entrypoint.test.js dist/effects.test.js dist/effect-results.test.js",
     "check": "npm run lint && npm run typecheck && npm test",
     "start": "node scripts/start.mjs",
     "dev": "node scripts/start.mjs --import tsx --watch src/main.ts"
