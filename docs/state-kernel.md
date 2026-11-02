@@ -56,6 +56,9 @@ age and PID absence alone never authorize replacement.
   native GitHub `blocked_by` read, and sends current evidence through atomic
   admission. Non-coding prerequisite proofs are loaded from current, authorized
   `PrerequisiteConfirmationStore` records.
+- `GitHubBlockedByReader` reads the repository's native blocked-by graph from
+  GitHub's REST API with a short-lived installation token, checks each returned
+  issue's repository binding and fails closed when the graph exceeds its limit.
 - `CollaborativeIssueWriteCoordinator` persists preflight, title/body writes,
   each native dependency change and final readback as separate effect steps.
   It updates the retained scope revision and job binding only after the remote
