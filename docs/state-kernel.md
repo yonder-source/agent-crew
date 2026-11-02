@@ -9,10 +9,11 @@ volume as the database.
 ## Writer lifecycle
 
 After the lock is held, startup increments `controller_writer.generation` and
-sets the writer to `recovering`. Recovery classifies every unfinished effect
-step owned by an earlier generation as `unknown`, records an audit event, and
-leaves dependent steps blocked. Only after that pass succeeds does the writer
-become `healthy` and the HTTP listener start. Heartbeats run every five seconds;
+sets the writer to `recovering`. Recovery marks started effect steps owned by
+an earlier generation as `unknown`; intents with no start claim remain pending.
+It records each classification before dependent work is reopened. Only after
+that pass succeeds does the writer become `healthy` and the HTTP listener
+start. Heartbeats run every five seconds;
 three missed intervals latch the writer to `unhealthy`. That state rejects
 claims, intent writes and result writes without enabling takeover.
 
@@ -32,8 +33,9 @@ age and PID absence alone never authorize replacement.
   target, expected job/execution/scope/policy versions, authorization evidence,
   step identities and the intent audit event in one transaction. The caller
   must commit this intent before invoking an adapter.
-- `EffectStore.canStartStep` permits only pending steps whose dependencies are
-  confirmed successful. An identical operation identity and command return
+- `EffectStore.claimStepStart` atomically claims one pending step after its
+  dependencies are confirmed successful. Duplicate start claims return false.
+  An identical operation identity and command return
   the existing state. Changed command or authorization data under the same
   identity is audited and rejected.
 - A matching action remains blocked while an earlier operation is unknown.
@@ -44,6 +46,10 @@ age and PID absence alone never authorize replacement.
   from an older generation is appended to audit history and cannot change the
   current step state. Unknown results remain visible until current-generation
   reconciliation confirms success or failure.
+- `EffectResultStore.retryStep` accepts only a confirmed failure classified by
+  the adapter as a safe read or confirmed not applied. It preserves the prior
+  result in audit history and queues another start with the same operation and
+  step identities; adapters own retry counts, backoff and jitter.
 
 Authorization evidence and effect results are separate immutable/observed
 records. Audit history is append-only. Persist only structured receipts and
