@@ -39,6 +39,12 @@ the management UI.
 Slack and the UI build the job view from Controller records and current
 Gateway, runtime, GitHub and delivery observations.
 
+Each coding execution uses a paired OpenClaw node for native Codex remote
+execution. The Gateway retains Slack and model access. A separate trusted host
+supervisor owns validated Swarm task operations and independent active-time
+deadlines; the Controller invokes it through a narrow authenticated API and
+remains the sole workflow-state writer.
+
 ## 2. Controller modules
 
 | Module | Operations | Responsibilities |
@@ -51,9 +57,10 @@ Gateway, runtime, GitHub and delivery observations.
 | Effect delivery | Record intent, execute, reconcile and report | Durable queue, operation identity, bounded retries and receipts |
 
 Native tool and HTTP adapters pass caller identity, structured requests and
-applicable session bindings to Controller modules. The modules authorize
-against current permissions, repository and issue bindings, and the job,
-execution and ownership generation for admitted coding work.
+applicable session bindings to Controller modules. Privileged UI actions use a
+custom Gateway method carrying a server-authenticated user profile. The modules
+authorize against current permissions, repository and issue bindings, and the
+job, execution and ownership generation for admitted coding work.
 
 ## 3. State and effect contracts
 
@@ -100,9 +107,11 @@ adapter applies the conditional-update and conflict rules in
 
 ## 5. Permissions and trust boundary
 
-Docker Swarm hosts v1 on one trusted machine. Infrastructure privileges stay
-with the Gateway, Controller and runtime supervisor. Task runtimes and CI jobs
-receive no publication credentials or Docker/Swarm administration access.
+Docker Swarm hosts v1 on one trusted machine. The Gateway holds Slack and model
+credentials; the Controller holds workflow state and scoped GitHub credentials;
+the runtime supervisor holds validated Swarm task-operation authority. Task
+runtimes and CI jobs receive no publication credentials or Docker/Swarm
+administration access.
 
 Secret mounts, host-operation grants and credential rotation are covered by
 [T05](../spec.md#7-technical-decisions-and-verification).

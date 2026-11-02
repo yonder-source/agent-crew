@@ -76,6 +76,13 @@ execution policy and Docker Secret references.
 Map authorized humans' GitHub and Slack identities and configure their
 per-repository permissions.
 
+Privileged UI actions use a custom Gateway method carrying a stable,
+server-authenticated user profile. Map that profile to configured human
+permissions; never accept identity supplied by a browser or agent. Each
+installation selects a supported verified-person authentication mode, such as
+Tailscale identity or a trusted proxy. Refuse human decisions when identity is
+missing, shared or unresolved.
+
 Validate credentials, secret identities and readiness of configured agent
 roles and tools before activating a configuration revision. Read the saved
 configuration back to verify activation and report successful activation.
@@ -138,19 +145,43 @@ confirmation.
 
 ### R4. Readiness and automatic admission
 
-An authorized human applies `ready for agent`. Periodic discovery
-automatically picks up eligible issues and assigns coding work. Agent tools
-expose no operation for adding or removing the ready label.
+An authorized human marks the exact issue revision ready in either of two ways:
+apply `ready for agent` in GitHub, or approve the ready action in the bound Slack
+conversation after grilling. For Slack approval, the Designer may call the
+Controller to apply the label on the human's behalf. The Controller records the
+approver and approved revision; the label event alone is not proof of that
+approval. The Designer cannot initiate this action without the human's approval,
+and coding agents cannot add or remove the label. Periodic discovery scans for
+eligible labeled issues and admits them.
 
 Readiness has no automatic expiry. Before admission, verify current label
-presence, the labeler's current authority, repository binding, issue evidence,
-policy, dependencies and capacity. Record the exact issue content as the
-admitted scope.
+presence and its approval evidence, current approver authority, repository
+binding, issue revision, policy, dependencies and capacity. Record the exact
+issue content as the admitted scope. For a GitHub action, retain the label event
+and its human actor. For a Slack action, retain the human approval receipt and
+the Controller's label-write receipt, bound to the same issue and revision.
+Read dependencies from the repository's native GitHub `blocked_by` relations;
+body mentions alone do not create prerequisites. Require R3 completion evidence
+before admitting dependent work.
+
+If GitHub and Slack/Controller readiness evidence both exist, they must agree
+on repository, issue revision and authorized human. Contradictory evidence blocks
+admission for human resolution; neither source silently overrides the other.
+Any issue revision change after approval invalidates that approval for admission.
+Admission evaluates current dependencies and prerequisite completion evidence,
+even when readiness was recorded earlier; a newly added or newly incomplete
+dependency keeps the issue queued.
 
 **Edge cases**
 
 - Dependency cycles or missing completion evidence keep work queued with a
   visible reason.
+- Conflicting readiness evidence, changed issue revision, stale authority or
+  repository-binding mismatch blocks admission until current evidence is
+  established by an authorized human.
+- If neither a trustworthy saved scope revision nor usable history establishes
+  the current issue revision, block coding and ask an authorized human to confirm
+  that exact revision before implementation.
 - Deduplicate polls and claims into one job per issue, with at most one live
   execution per job.
 - Removing readiness prevents queued or unstarted work from starting. Existing
@@ -171,6 +202,13 @@ Poll only the issue title, body and declared dependencies at the configured
 interval, and verify freshness before publication. Match expected writes to
 durable receipts. Unchanged content invokes no model and does not interrupt coding.
 
+For each Controller issue write, retain the operation ID, issue ID, expected
+scope revision, preflight and proposed fields, write outcome, readback and
+observation times. Record verified convergence separately from evidence that the
+Controller authored the change; matching final content alone does not establish
+authorship. Apply native dependency changes as separate effects from title/body
+writes, with their own intent, outcome and readback.
+
 **Edge cases**
 
 - Failed reads leave verification unavailable or delayed.
@@ -182,9 +220,17 @@ durable receipts. Unchanged content invokes no model and does not interrupt codi
 - Concurrent edits during an agreed update: durably queue the proposed version,
   preserve the remote version and notify the human in Slack. Revalidate the
   resolved version before applying it.
-- Without atomic conditional updates, use a fresh preflight read, write and
-  readback. V1 accepts the remaining risk of overwriting an undetected edit
-  between read and write.
+- Partial dependency update: retain each relationship operation's outcome and
+  reconcile the remote relations before retrying; do not treat a partly applied
+  set as an atomic issue update.
+- **Known residual risk (T02):** GitHub issue updates lack a verified atomic
+  conditional write in this design. Use a fresh preflight read, write and
+  readback, but recognize that a concurrent undetected edit can still be
+  overwritten. Treat this as an exposed residual risk, not evidence of a
+  conflict-free write. Preserve available evidence and route detected conflicts
+  for human resolution. Future hardening: use provider-supported conditional
+  updates or an equivalent compare-and-swap, then verify its behavior before
+  removing this risk entry.
 
 ### R6. Execution, budgets and interruption
 
@@ -193,12 +239,23 @@ durable receipts. Unchanged content invokes no model and does not interrupt codi
 - Run each execution in an isolated, non-root runtime with pinned source,
   explicit inputs and declared validation commands. Exclude host home
   directories, other-job files, Docker sockets and infrastructure credentials.
+- Use a per-execution paired OpenClaw node with native Codex remote execution
+  for coding file and process tools. Slack transport and model credentials stay
+  on the Gateway. The node receives only its scoped runtime identity; Gateway
+  host-tool fallbacks are unavailable to coding executions.
+- Run the trusted runtime supervisor as a separate host process. It owns
+  validated Swarm task operations and the independent active-time deadline,
+  exposes a narrow authenticated API to the Controller, and cannot write
+  workflow state or publish code. Task runtimes receive no Swarm authority.
 - Enforce workspace, input and tool grants outside the model, including for
   subprocesses and package scripts. Installation follows task and environment
   policy; package scripts cannot install globally or on the host.
 - Restrict outbound access to configured dependency and task-service
   destinations. Block management endpoints and unrelated internal networks;
   extra access needs human authorization.
+- Qualify official OpenClaw 2026.10.9 against its packaged SDK and dependency
+  security before pinning the image digest and matching SDK. Record and qualify
+  the exact Docker Engine/Swarm version used by the installation.
 
 **Budget accounting**
 
@@ -206,6 +263,12 @@ Track active time and model usage per execution and job. Exclude human waits
 from active time. Include observable usage from retries, fallbacks, compaction
 and delegated sessions. Preserve both totals across restarts, repairs and scope
 revisions.
+
+Use the live cumulative output count for output and burn-rate guards, and
+reconcile it with fuller attempt-final usage without double-counting. Mark
+input, cache and total usage partial or unknown when the runtime does not expose
+them. Enforce usage limits only for observed metrics; they do not guarantee a
+hard provider billing cap.
 
 Use native loop detection. Enforce the active-time limit independently of the
 Controller.
@@ -249,9 +312,35 @@ checks and human review; verify final HEAD, checks and merge status on completio
 PR descriptions cannot authorize closing unrelated issues or marking tracking
 issues or partial work as delivered.
 
+Accept required checks on candidate commit `H` or on synthetic merge commit `M`
+only when its parents bind the exact `H` and current base `B`. Bind each check to
+the repository, PR, target SHA, configured check identity and expected producer;
+include workflow identity when required by policy. Accept `success` by default.
+Only `success` passes a required check by default. `neutral` and `skipped` are
+not success unless the configured policy explicitly allows each result, and
+must not be reported as executed validation. Missing, pending, stale or
+wrong-target results never satisfy a required check. Refresh checks and reviews
+if candidate, base or policy changes. A submitted approval counts only for the
+exact candidate and a currently authorized reviewer; dismissed or revoked
+approvals do not count.
+After a candidate, base or policy change, prior check results and review
+decisions do not satisfy the new candidate: wait for checks on the current
+candidate and a current authorized review before delivery or repair decisions.
+Missing or pending checks block completion and repair; they are not themselves
+repair triggers. A changed candidate may still be published to its PR so the
+provider can run checks, but it cannot be reported ready or merged until fresh
+required evidence is observed. Stale or revoked approvals likewise require a
+new approval for the current candidate.
+
+Known protected changes and uncertain classification require human approval for
+the exact candidate, base and policy. Ordinary test maintenance is allowed.
+
 Automated repair responds only to failed required CI checks or an authorized
-reviewer's explicit request for changes. Batch actionable feedback at repair
-start; preserve the repair count across restarts and scope revisions.
+reviewer's submitted `CHANGES_REQUESTED` review on the bound candidate. Comments
+and bot feedback alone are informational. Batch actionable feedback at repair
+start; reserve the repair allowance atomically and preserve the cycle across
+restarts. If a PR is merged without required policy evidence, record the merge
+but keep delivery blocked; do not repair the merged PR.
 
 **Edge cases**
 
@@ -276,13 +365,49 @@ against GitHub. Give each job a stable `job_id` and each execution an
 `execution_id`. Link executions, Gateway sessions and Swarm observations to
 the job.
 
-Save human input and effect intent before acknowledging acceptance. Include
-the operation identity, authenticated caller identity, authorization evidence,
-job, execution, scope version and policy version. Record completion
-separately, using a receipt or verification from the external service. Keep
-append-only history and record late results. Give each new authorized action a
-new identity. Track effects as pending, confirmed successful, confirmed failed
-or unknown. Reusing source requires current authorization.
+Keep job phase, requested control (`run`, `pause` or `cancel`) and execution
+lifecycle as separate state. Job phase describes workflow progress; requested
+control remains durable while an asynchronous pause or cancellation is in
+progress. Track execution reservation, start, active, stop and terminal outcome
+with its ownership generation. Store blockers and pending human decisions as
+durable records rather than encoding their details in phase names.
+
+Save human input and effect intent before acknowledging acceptance. Include the
+stable operation identity, authenticated caller, authorization evidence, bound
+target, argument fingerprint, and expected job, execution, scope and policy
+versions. A command that performs multiple external actions has a stable step
+identity for each effect. Persist accepted intent and audit evidence in one
+transaction before executing effects; execute network and runtime work outside
+transactions, then record completion through a version- and generation-checked
+transaction. Record completion separately, using a receipt or verification from
+the external service. Keep append-only history and record late results. Give each
+new authorized action a new identity. Track effects as pending, confirmed
+successful, confirmed failed or unknown. Reusing source requires current
+authorization.
+
+Atomically assign each accepted job state change a monotonically increasing
+per-job sequence and increment its row version. Provider timestamps and
+observation times are evidence, not ordering authority. Append stale or late
+observations to history without letting them overwrite newer state. Build Slack
+and UI status from durable records and current external observations; any cached
+view must be rebuildable.
+
+Configure the workflow database with SQLite WAL, `synchronous=FULL`, and foreign
+keys enabled. Use short `BEGIN IMMEDIATE` transactions for claims, capacity,
+ownership and effect-intent updates; perform network and runtime work after
+commit. Verify the effective database settings at startup.
+
+The Controller writer holds an exclusive host-local OS process lock for its
+entire lifetime. It emits a heartbeat every five seconds; three missed
+heartbeats mark it unhealthy and block new admissions and effects, but do not
+expire ownership or authorize takeover. A replacement must acquire the same
+lock before starting work, and increments the durable writer generation before
+serving requests. Confirm the old process has exited and released the lock;
+never infer death from heartbeat loss or PID absence alone. If the process is
+alive but unresponsive, an authorized operator stops it, verifies lock release,
+then reconciles in-flight effects before reopening work. Every state mutation
+and effect completion is fenced by the writer generation, so late results from
+the previous generation remain history only.
 
 Slack and the UI share one job view. Show the phase, current execution,
 blocker and next permitted action. Include issue and PR links, usage,
@@ -297,11 +422,15 @@ status.
   the existing status or result without repeating work. Reject and audit
   changed arguments under the same identity.
 - Retry transient failures of safe reads or operations known not to have
-  started. Use bounded backoff and jitter.
+  started, reusing the same operation and step identities. Use bounded,
+  adapter-specific backoff and jitter; set numeric limits before operational
+  acceptance. Retain identities through the supported replay and recovery window.
 - Permanent refusals block the operation.
 - Reconcile uncertain writes before replay. Unknown outcomes block dependent
   or potentially duplicate actions, including after timeouts or exhausted
-  retries. Independent authorized work may continue.
+  retries. If reconciliation cannot resolve an outcome, require human
+  authorization for a replacement as a new effect. Independent authorized work
+  may continue.
 - Exhausted retries leave the operation blocked with its reason, responsible
   person or service and next action.
 
@@ -352,10 +481,17 @@ credentials.
 
 ### R10. Preservation, operations and recovery
 
+Release artifacts use pinned image digests and record matching SDK/plugin
+versions plus configuration and database-schema compatibility. Keep host
+identities, secret references and off-host backup settings in installation
+configuration.
+
 Before destructive runtime cleanup, confirm that execution has stopped and
 preserve unfinished source in a verified private checkpoint. Include Git
 history, local commits, tracked and untracked task files, source identity and
-restore metadata; exclude credentials. Test restoration in a fresh runtime.
+restore metadata; exclude credentials. Store it as a standalone compressed
+archive with a versioned manifest and content hashes. Reject unsafe paths and
+verify restoration in a fresh runtime before allowing cleanup.
 
 Apply the configured retention period to successful-job checkpoints. Keep
 unfinished or blocked checkpoints until those jobs are explicitly resolved.
@@ -365,9 +501,30 @@ Before a planned Controller replacement, drain work until the system is
 operationally idle. Stop new admissions, continuations, repair attempts and
 external effects while active operations settle. Preserve queued work, pending
 questions and jobs awaiting review. Confirm that the old writer has stopped,
-activate the replacement and reconcile ownership. Then reopen admission.
+preserve a recovery point, activate one replacement, check schema compatibility,
+reconcile ownership and external state, then reopen admission. Do not overlap
+Controller writers.
 
-Keep consistent off-host backups of workflow state and source artifacts.
+Rollback may run the previous release against current state only when that
+release declares the current schema compatible. Otherwise restore the matching
+release backup and reconcile remote state before reopening. A down migration is
+not required for every schema change.
+
+Keep consistent off-host recovery sets of workflow state and referenced source
+artifacts. Fence artifact garbage collection while a set is in progress. Create
+the database copy with SQLite's online backup API; enumerate artifact references
+from that completed copy, then copy and verify the immutable artifacts. Publish
+the recovery-set manifest last so an incomplete set cannot replace the last
+complete one. Configure the off-host target,
+access controls, cadence, retention and storage encryption per installation
+before operational acceptance; application-level artifact encryption is not
+required.
+
+Recovery restores durable jobs, questions, scope and checkpoints, not complete
+OpenClaw conversation history. Recreate Gateway sessions as needed from durable
+job state and available Slack history. A recovery set does not contain Swarm
+manager state or credentials; on a fresh host the operator reprovisions Docker
+Secrets and other credentials before services resume.
 
 **Edge cases**
 
@@ -379,10 +536,16 @@ Keep consistent off-host backups of workflow state and source artifacts.
   restore the checkpoint in a fresh runtime. Missing source or uncertain
   ownership blocks restart.
 - Use crash recovery and stale-worker fencing for unplanned replacement.
-- After restoring a backup, keep dispatch paused. Reconcile restored records
-  with actual runtimes and external state. Verify restored state references
-  recoverable source artifacts. Preserve newer remote facts and prevent
-  duplicate execution.
+- After any backup restore or host-loss recovery, keep admissions and effects
+  paused until the restore gate passes. Verify database integrity, foreign keys
+  and schema compatibility; verify every restored checkpoint reference resolves
+  to a recoverable artifact with matching hashes. Compare restored records with
+  current runtimes, branches, PRs and external effects. Preserve and reconcile
+  newer remote facts rather than overwriting them with restored state; prevent
+  duplicate execution or effects. Unresolved or unavailable evidence keeps
+  admissions paused and exposes a recovery blocker for human resolution.
+- After host loss, restore into fresh state and artifact paths and reprovision
+  platform secrets out of band before services resume.
 
 ## 5. Default policies and unresolved limits
 
@@ -443,12 +606,12 @@ Resolve each contract before implementing dependent components.
 
 | ID | Contract to complete | Required output |
 | --- | --- | --- |
-| T01 | Admission and initial scope evidence | Labeler's GitHub identity, application time and label history; identity mapping; initial observation; concurrent removal and admission; handling incomplete history |
-| T02 | Issue writes | Expected content before and after each write, receipts, edit attribution, conflict detection and conditional-write support; document the remaining overwrite race |
-| T03 | Persistence and lifecycle | Controller process layout, job and execution transitions, atomic version and ownership updates, observation ordering and rules for rebuilding status views |
-| T04 | External-effect adapters | Schemas for each operation, key scope and retention, argument fingerprints, transactions for intent and audit records, retry budgets and reconciliation evidence |
-| T05 | Runtime and privilege grants | Pinned OpenClaw and Swarm versions, management UI page integration, runtime placement, tool and network enforcement, service access to secrets and host operations, internal authentication and rotation |
-| T06 | Source and backup recovery | Archive format, capture schedule, encryption, access controls, a consistent database and artifact manifest, and a restore procedure |
-| T07 | Metering and limits | Hook coverage, loop detection and stopping a specific run; usage and burn-rate thresholds, grace periods and active-time accounting |
-| T08 | Validation and protected changes | Validation of the exact candidate, required CI checks, authorized reviewer identities, detection of protected changes and escalation of uncertain cases |
-| T09 | Operations and packaging | Repeatable installation, upgrades and maintenance; off-host storage configuration; access and retention policies; release packaging |
+| T01 | Admission and initial scope evidence | Settled in R4: human-authorized readiness through GitHub or Slack/Controller, revision-bound approval evidence, native `blocked_by` dependencies, and the missing-scope clarification path. Verify these paths and the readiness-removal/start boundary during implementation. |
+| T02 | Issue writes | Settled in R5 with a known residual risk: preflight/write/readback can overwrite an undetected concurrent edit because atomic conditional updates are unverified. Preserve evidence and route detected conflicts for human resolution; future hardening is provider-supported conditional update or compare-and-swap. |
+| T03 | Persistence and lifecycle | Settled in R8 and ADRs 0002–0003: one installation-wide writer holds a host-local OS lock; 5-second heartbeat with 15-second unhealthy threshold never authorizes takeover. A replacement waits for confirmed process exit and lock release, increments the writer generation, and reconciles in-flight effects. Verify process replacement, restart recovery and stale-generation fencing during implementation. |
+| T04 | External-effect adapters | Settled in R8: stable command and per-effect step identities, intent/audit before execution, version-fenced receipts, unknown-outcome reconciliation, and bounded adapter-specific retries. Set numeric limits before operational acceptance; verify provider receipts and reconciliation during implementation. |
+| T05 | Runtime and privilege grants | Settled in R1/R6: qualify OpenClaw 2026.10.9, per-execution paired-node Codex remote execution, separate Swarm/deadline supervisor, and server-authenticated UI identity. Pin the qualified image/SDK and installation Swarm version; verify tool, network, identity and stop boundaries before unattended coding. |
+| T06 | Source and backup recovery | Settled in R10: verified standalone source archives; SQLite online backup with snapshot-derived artifact references and a final recovery manifest; every restore verifies database/schema and artifact integrity, reconciles current external facts, and keeps admissions/effects paused until the gate passes. Full OpenClaw conversation history, Swarm manager state and application-level artifact encryption are out of scope. Configure off-host target, storage controls, cadence and retention before operational acceptance; verify host-loss restore during implementation. |
+| T07 | Metering and limits | Settled in R6: use live cumulative output for output/burn-rate guards and reconcile fuller attempt-final usage without double-counting; mark unavailable input, cache or total usage partial/unknown. Limits apply only to observed metrics and are not a hard provider billing cap. Set thresholds and metering grace before operational acceptance; verify plugin delivery, resets, grace and abort overshoot. |
+| T08 | Validation and protected changes | Settled in R7: accept checks on exact candidate H or synthetic merge M bound to H and current base B. Only success passes by default; neutral/skipped pass only when policy explicitly allows them. Missing, pending, stale or wrong-target checks and stale/revoked reviews block delivery; candidate/base/policy changes require fresh evidence. Only current required-check failures or authorized CHANGES_REQUESTED reviews trigger repair. A merge missing required evidence is recorded but remains blocked for delivery. |
+| T09 | Operations and packaging | Settled in R10: pin release image digests and record matching SDK/plugin and configuration/schema compatibility; drain, preserve recovery point, stop old writer, activate one compatible replacement, reconcile, then reopen; rollback to old binary only with schema compatibility, otherwise restore its matching backup and reconcile. Off-host destination, access, cadence, retention and encryption remain installation settings required before operational acceptance. |

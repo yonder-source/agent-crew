@@ -11,8 +11,9 @@ Agent Crew control over authorization, durable jobs and external effects.
 
 Keep Controller modules in one application. Extract a service when security or
 operational requirements justify the additional deployment and coordination.
-Process topology and runtime-supervision separation remain open under T03
-and T05 in the specification.
+The installation-wide writer is defined in
+[ADR 0003](0003-one-controller-writer-per-installation.md); runtime-supervision
+grants remain under T05 in the specification.
 
 Related documents: [technical baseline](../../spec.md#3-technical-baseline),
 [component ownership](../architecture.md#1-components-and-ownership).
