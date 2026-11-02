@@ -481,6 +481,11 @@ credentials.
 
 ### R10. Preservation, operations and recovery
 
+Release artifacts use pinned image digests and record matching SDK/plugin
+versions plus configuration and database-schema compatibility. Keep host
+identities, secret references and off-host backup settings in installation
+configuration.
+
 Before destructive runtime cleanup, confirm that execution has stopped and
 preserve unfinished source in a verified private checkpoint. Include Git
 history, local commits, tracked and untracked task files, source identity and
@@ -496,7 +501,14 @@ Before a planned Controller replacement, drain work until the system is
 operationally idle. Stop new admissions, continuations, repair attempts and
 external effects while active operations settle. Preserve queued work, pending
 questions and jobs awaiting review. Confirm that the old writer has stopped,
-activate the replacement and reconcile ownership. Then reopen admission.
+preserve a recovery point, activate one replacement, check schema compatibility,
+reconcile ownership and external state, then reopen admission. Do not overlap
+Controller writers.
+
+Rollback may run the previous release against current state only when that
+release declares the current schema compatible. Otherwise restore the matching
+release backup and reconcile remote state before reopening. A down migration is
+not required for every schema change.
 
 Keep consistent off-host recovery sets of workflow state and referenced source
 artifacts. Fence artifact garbage collection while a set is in progress. Create
@@ -504,8 +516,9 @@ the database copy with SQLite's online backup API; enumerate artifact references
 from that completed copy, then copy and verify the immutable artifacts. Publish
 the recovery-set manifest last so an incomplete set cannot replace the last
 complete one. Configure the off-host target,
-access controls and storage encryption per installation; application-level
-artifact encryption is not required.
+access controls, cadence, retention and storage encryption per installation
+before operational acceptance; application-level artifact encryption is not
+required.
 
 Recovery restores durable jobs, questions, scope and checkpoints, not complete
 OpenClaw conversation history. Recreate Gateway sessions as needed from durable
@@ -601,4 +614,4 @@ Resolve each contract before implementing dependent components.
 | T06 | Source and backup recovery | Settled in R10: verified standalone source archives; SQLite online backup with snapshot-derived artifact references and a final recovery manifest; every restore verifies database/schema and artifact integrity, reconciles current external facts, and keeps admissions/effects paused until the gate passes. Full OpenClaw conversation history, Swarm manager state and application-level artifact encryption are out of scope. Configure off-host target, storage controls, cadence and retention before operational acceptance; verify host-loss restore during implementation. |
 | T07 | Metering and limits | Settled in R6: use live cumulative output for output/burn-rate guards and reconcile fuller attempt-final usage without double-counting; mark unavailable input, cache or total usage partial/unknown. Limits apply only to observed metrics and are not a hard provider billing cap. Set thresholds and metering grace before operational acceptance; verify plugin delivery, resets, grace and abort overshoot. |
 | T08 | Validation and protected changes | Settled in R7: accept checks on exact candidate H or synthetic merge M bound to H and current base B. Only success passes by default; neutral/skipped pass only when policy explicitly allows them. Missing, pending, stale or wrong-target checks and stale/revoked reviews block delivery; candidate/base/policy changes require fresh evidence. Only current required-check failures or authorized CHANGES_REQUESTED reviews trigger repair. A merge missing required evidence is recorded but remains blocked for delivery. |
-| T09 | Operations and packaging | Repeatable installation, upgrades and maintenance; off-host storage configuration; access and retention policies; release packaging |
+| T09 | Operations and packaging | Settled in R10: pin release image digests and record matching SDK/plugin and configuration/schema compatibility; drain, preserve recovery point, stop old writer, activate one compatible replacement, reconcile, then reopen; rollback to old binary only with schema compatibility, otherwise restore its matching backup and reconcile. Off-host destination, access, cadence, retention and encryption remain installation settings required before operational acceptance. |
