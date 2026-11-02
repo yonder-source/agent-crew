@@ -138,19 +138,43 @@ confirmation.
 
 ### R4. Readiness and automatic admission
 
-An authorized human applies `ready for agent`. Periodic discovery
-automatically picks up eligible issues and assigns coding work. Agent tools
-expose no operation for adding or removing the ready label.
+An authorized human marks the exact issue revision ready in either of two ways:
+apply `ready for agent` in GitHub, or approve the ready action in the bound Slack
+conversation after grilling. For Slack approval, the Designer may call the
+Controller to apply the label on the human's behalf. The Controller records the
+approver and approved revision; the label event alone is not proof of that
+approval. The Designer cannot initiate this action without the human's approval,
+and coding agents cannot add or remove the label. Periodic discovery scans for
+eligible labeled issues and admits them.
 
 Readiness has no automatic expiry. Before admission, verify current label
-presence, the labeler's current authority, repository binding, issue evidence,
-policy, dependencies and capacity. Record the exact issue content as the
-admitted scope.
+presence and its approval evidence, current approver authority, repository
+binding, issue revision, policy, dependencies and capacity. Record the exact
+issue content as the admitted scope. For a GitHub action, retain the label event
+and its human actor. For a Slack action, retain the human approval receipt and
+the Controller's label-write receipt, bound to the same issue and revision.
+Read dependencies from the repository's native GitHub `blocked_by` relations;
+body mentions alone do not create prerequisites. Require R3 completion evidence
+before admitting dependent work.
+
+If GitHub and Slack/Controller readiness evidence both exist, they must agree
+on repository, issue revision and authorized human. Contradictory evidence blocks
+admission for human resolution; neither source silently overrides the other.
+Any issue revision change after approval invalidates that approval for admission.
+Admission evaluates current dependencies and prerequisite completion evidence,
+even when readiness was recorded earlier; a newly added or newly incomplete
+dependency keeps the issue queued.
 
 **Edge cases**
 
 - Dependency cycles or missing completion evidence keep work queued with a
   visible reason.
+- Conflicting readiness evidence, changed issue revision, stale authority or
+  repository-binding mismatch blocks admission until current evidence is
+  established by an authorized human.
+- If neither a trustworthy saved scope revision nor usable history establishes
+  the current issue revision, block coding and ask an authorized human to confirm
+  that exact revision before implementation.
 - Deduplicate polls and claims into one job per issue, with at most one live
   execution per job.
 - Removing readiness prevents queued or unstarted work from starting. Existing
@@ -443,7 +467,7 @@ Resolve each contract before implementing dependent components.
 
 | ID | Contract to complete | Required output |
 | --- | --- | --- |
-| T01 | Admission and initial scope evidence | Labeler's GitHub identity, application time and label history; identity mapping; initial observation; concurrent removal and admission; handling incomplete history |
+| T01 | Admission and initial scope evidence | Settled in R4: human-authorized readiness through GitHub or Slack/Controller, revision-bound approval evidence, native `blocked_by` dependencies, and the missing-scope clarification path. Verify these paths and the readiness-removal/start boundary during implementation. |
 | T02 | Issue writes | Expected content before and after each write, receipts, edit attribution, conflict detection and conditional-write support; document the remaining overwrite race |
 | T03 | Persistence and lifecycle | Controller process layout, job and execution transitions, atomic version and ownership updates, observation ordering and rules for rebuilding status views |
 | T04 | External-effect adapters | Schemas for each operation, key scope and retention, argument fingerprints, transactions for intent and audit records, retry budgets and reconciliation evidence |
