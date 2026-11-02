@@ -1,3 +1,4 @@
+import { EffectAuditLog } from './effect-audit.js';
 import { StateError } from './state-common.js';
 import type { StateContext } from './state-common.js';
 import { canonicalJson, outcomeFor } from './effect-model.js';
@@ -5,7 +6,11 @@ import type { EffectOutcome, EffectResultSource, EffectStep, RawOperation, RawSt
 import type { EffectStore } from './effects.js';
 
 export class EffectResultStore {
-  constructor(private readonly state: StateContext, private readonly effects: EffectStore) {}
+  private readonly audit: EffectAuditLog;
+
+  constructor(private readonly state: StateContext, private readonly effects: EffectStore) {
+    this.audit = new EffectAuditLog(state);
+  }
 
   recordResult(input: {
     operationId: string;
@@ -44,7 +49,7 @@ export class EffectResultStore {
         ).get(input.operationId, input.stepId) as RawStep | undefined;
         if (!step) throw new StateError('STEP_NOT_FOUND', 'Effect step does not exist');
         if (step.row_version !== input.expectedStepVersion) {
-          this.appendAudit(input.operationId, 'effect_result_rejected_stale_version', {
+          this.audit.append(input.operationId, 'effect_result_rejected_stale_version', {
             stepId: input.stepId,
             expectedVersion: input.expectedStepVersion,
             actualVersion: step.row_version,
@@ -59,7 +64,7 @@ export class EffectResultStore {
           input.resultGeneration !== input.writerGeneration
           || (input.resultSource === 'provider_receipt' && input.resultGeneration !== rawOperation.writer_generation)
         ) {
-          this.appendAudit(input.operationId, 'stale_effect_observation', {
+          this.audit.append(input.operationId, 'stale_effect_observation', {
             stepId: input.stepId,
             observedStatus: input.status,
             resultGeneration: input.resultGeneration,
@@ -71,7 +76,7 @@ export class EffectResultStore {
           input.resultSource === 'provider_receipt'
           && (step.started_generation !== input.resultGeneration || step.started_at === null)
         ) {
-          this.appendAudit(input.operationId, 'effect_result_observed_without_start_claim', {
+          this.audit.append(input.operationId, 'effect_result_observed_without_start_claim', {
             stepId: input.stepId,
             observedStatus: input.status,
             resultGeneration: input.resultGeneration,
@@ -80,7 +85,7 @@ export class EffectResultStore {
           return { historyOnly: true };
         }
         if (step.status === 'confirmed_success' || step.status === 'confirmed_failure') {
-          this.appendAudit(input.operationId, 'effect_result_observed_after_confirmation', {
+          this.audit.append(input.operationId, 'effect_result_observed_after_confirmation', {
             stepId: input.stepId,
             observedStatus: input.status,
             resultGeneration: input.resultGeneration,
@@ -110,7 +115,7 @@ export class EffectResultStore {
           UPDATE effect_operations SET status = ?, row_version = row_version + 1, updated_at = ?
           WHERE operation_id = ?
         `).run(nextStatus, occurredAt, input.operationId);
-        this.appendAudit(input.operationId, 'effect_result_recorded', {
+        this.audit.append(input.operationId, 'effect_result_recorded', {
           stepId: input.stepId,
           stepVersion: input.expectedStepVersion + 1,
           status: input.status,
@@ -170,7 +175,7 @@ export class EffectResultStore {
         ).get(input.operationId, input.stepId) as RawStep | undefined;
         if (!step) throw new StateError('STEP_NOT_FOUND', 'Effect step does not exist');
         if (step.row_version !== input.expectedStepVersion) {
-          this.appendAudit(input.operationId, 'effect_retry_rejected_stale_version', {
+          this.audit.append(input.operationId, 'effect_retry_rejected_stale_version', {
             stepId: input.stepId,
             expectedVersion: input.expectedStepVersion,
             actualVersion: step.row_version,
@@ -178,7 +183,7 @@ export class EffectResultStore {
           return { rejected: 'STALE_ROW_VERSION' as const };
         }
         if (step.status !== 'confirmed_failure' || step.result_source === 'recovery') {
-          this.appendAudit(input.operationId, 'effect_retry_rejected_outcome', {
+          this.audit.append(input.operationId, 'effect_retry_rejected_outcome', {
             stepId: input.stepId,
             status: step.status,
             resultSource: step.result_source,
@@ -187,7 +192,7 @@ export class EffectResultStore {
         }
         const job = this.state.getJobOrThrow(rawOperation.job_id);
         if (job.scope_revision_id !== rawOperation.scope_revision_id) {
-          this.appendAudit(input.operationId, 'effect_retry_rejected_stale_scope', {
+          this.audit.append(input.operationId, 'effect_retry_rejected_stale_scope', {
             stepId: input.stepId,
             expectedScopeRevisionId: rawOperation.scope_revision_id,
             currentScopeRevisionId: job.scope_revision_id,
@@ -202,7 +207,7 @@ export class EffectResultStore {
           LIMIT 1
         `).get(input.stepId);
         if (blockedDependency) {
-          this.appendAudit(input.operationId, 'effect_retry_rejected_dependency', {
+          this.audit.append(input.operationId, 'effect_retry_rejected_dependency', {
             stepId: input.stepId,
           }, input.writerGeneration, occurredAt);
           return { rejected: 'EFFECT_DEPENDENCY_BLOCKED' as const };
@@ -221,7 +226,7 @@ export class EffectResultStore {
             row_version = row_version + 1, updated_at = ?
           WHERE operation_id = ?
         `).run(outcomeFor(outcomes.map((row) => row.status)), input.writerGeneration, occurredAt, input.operationId);
-        this.appendAudit(input.operationId, 'effect_retry_queued', {
+        this.audit.append(input.operationId, 'effect_retry_queued', {
           stepId: input.stepId,
           safetyClassification: input.safetyClassification,
           previousResult: JSON.parse(step.result_json ?? '{}') as unknown,
@@ -291,14 +296,14 @@ export class EffectResultStore {
               row.step_id,
             );
             unknownStepIds.push(row.step_id);
-            this.appendAudit(operationId, 'step_outcome_unknown_after_replacement', {
+            this.audit.append(operationId, 'step_outcome_unknown_after_replacement', {
               stepId: row.step_id,
               previousWriterGeneration: row.writer_generation,
               recoveryGeneration: generation,
             }, generation, occurredAt);
           } else {
             preservedStepIds.push(row.step_id);
-            this.appendAudit(operationId, 'step_not_started_preserved_after_replacement', {
+            this.audit.append(operationId, 'step_not_started_preserved_after_replacement', {
               stepId: row.step_id,
               previousWriterGeneration: row.writer_generation,
               recoveryGeneration: generation,
@@ -330,25 +335,4 @@ export class EffectResultStore {
     }).immediate();
   }
 
-  private appendAudit(
-    operationId: string,
-    eventType: string,
-    payload: unknown,
-    generation: number,
-    occurredAt: string,
-  ): void {
-    const operation = this.state.database.prepare(
-      'SELECT event_sequence FROM effect_operations WHERE operation_id = ?',
-    ).get(operationId) as { event_sequence: number };
-    const sequence = operation.event_sequence + 1;
-    this.state.database.prepare(`
-      UPDATE effect_operations SET event_sequence = ?, row_version = row_version + 1, updated_at = ?
-      WHERE operation_id = ?
-    `).run(sequence, occurredAt, operationId);
-    this.state.database.prepare(`
-      INSERT INTO effect_audit_events (
-        operation_id, sequence, event_type, payload_json, writer_generation, occurred_at
-      ) VALUES (?, ?, ?, ?, ?, ?)
-    `).run(operationId, sequence, eventType, canonicalJson(payload), generation, occurredAt);
-  }
 }

@@ -1,3 +1,4 @@
+import { EffectAuditLog } from './effect-audit.js';
 import { createHash } from 'node:crypto';
 import { assertText, StateError } from './state-common.js';
 import type { RawExecution, StateContext } from './state-common.js';
@@ -19,7 +20,11 @@ import {
 } from './effect-model.js';
 
 export class EffectStore {
-  constructor(private readonly state: StateContext) {}
+  private readonly audit: EffectAuditLog;
+
+  constructor(private readonly state: StateContext) {
+    this.audit = new EffectAuditLog(state);
+  }
 
   begin(input: BeginEffectInput): { view: EffectOperationView; duplicate: boolean } {
     for (const [label, value] of Object.entries({
@@ -50,7 +55,7 @@ export class EffectStore {
     const steps = this.validateSteps(input.steps);
     const occurredAt = this.state.now().toISOString();
 
-    const result = this.state.database.transaction(() => {
+    const result = this.state.runWithStaleAudit(input.jobId, input.writerGeneration, occurredAt, 'effect_intent', () => {
       this.state.assertWriter(input.writerGeneration, occurredAt);
       const existing = this.state.database.prepare(
         'SELECT * FROM effect_operations WHERE operation_id = ?',
@@ -62,7 +67,7 @@ export class EffectStore {
         if (this.matches(existing, authorization, input, argumentFingerprint, targetJson, grantJson, steps)) {
           return { duplicate: true, conflict: false, blocked: false };
         }
-        this.appendAudit(input.operationId, 'operation_identity_conflict', {
+        this.audit.append(input.operationId, 'operation_identity_conflict', {
           attemptedArgumentFingerprint: argumentFingerprint,
           attemptedOperationKind: input.operationKind,
           attemptedTarget: targetJson,
@@ -95,7 +100,7 @@ export class EffectStore {
             'SELECT 1 AS found FROM effect_operations WHERE operation_id = ?',
           ).get(blockedOperationId);
           if (existingBlocked) {
-            this.appendAudit(blockedOperationId, 'unknown_effect_duplicate_blocked', {
+            this.audit.append(blockedOperationId, 'unknown_effect_duplicate_blocked', {
               attemptedOperationId: input.operationId,
               attemptedArgumentFingerprint: argumentFingerprint,
               replacementForOperationId: input.replacementForOperationId ?? null,
@@ -171,7 +176,7 @@ export class EffectStore {
       for (const step of steps) {
         for (const dependsOn of step.dependsOn ?? []) insertDependency.run(step.stepId, stepIds.get(dependsOn));
       }
-      this.appendAudit(input.operationId, 'operation_intent_recorded', {
+      this.audit.append(input.operationId, 'operation_intent_recorded', {
         operationKind: input.operationKind,
         argumentFingerprint,
         stepCount: steps.length,
@@ -189,7 +194,7 @@ export class EffectStore {
         occurredAt,
       });
       return { duplicate: false, conflict: false, blocked: false };
-    }).immediate();
+    });
 
     if (result.conflict) throw new StateError('OPERATION_ID_CONFLICT', 'Operation identity was reused with changed command or authorization data');
     if (result.blocked) throw new StateError('UNKNOWN_EFFECT_BLOCKS_DUPLICATE', 'An unknown effect must be reconciled or explicitly replaced before a matching action can start');
@@ -235,8 +240,12 @@ export class EffectStore {
   }
 
   claimStepStart(operationId: string, stepId: string, writerGeneration: number): boolean {
+    const owner = this.state.database.prepare(
+      'SELECT job_id FROM effect_operations WHERE operation_id = ?',
+    ).get(operationId) as { job_id: string } | undefined;
+    if (!owner) return false;
     const occurredAt = this.state.now().toISOString();
-    return this.state.database.transaction(() => {
+    return this.state.runWithStaleAudit(owner.job_id, writerGeneration, occurredAt, 'effect_start', () => {
       this.state.assertWriter(writerGeneration, occurredAt);
       const step = this.state.database.prepare(`
         SELECT step.*, operation.job_id, operation.writer_generation, operation.scope_revision_id
@@ -251,7 +260,7 @@ export class EffectStore {
         || step.writer_generation !== writerGeneration
       ) return false;
       if (this.state.getJobOrThrow(step.job_id).scope_revision_id !== step.scope_revision_id) {
-        this.appendAudit(operationId, 'effect_step_start_rejected_stale_scope', {
+        this.audit.append(operationId, 'effect_step_start_rejected_stale_scope', {
           stepId,
           expectedScopeRevisionId: step.scope_revision_id,
         }, writerGeneration, occurredAt);
@@ -271,7 +280,7 @@ export class EffectStore {
         WHERE step_id = ? AND status = 'pending' AND started_at IS NULL AND row_version = ?
       `).run(writerGeneration, occurredAt, occurredAt, stepId, step.row_version);
       if (claim.changes !== 1) return false;
-      this.appendAudit(operationId, 'effect_step_start_claimed', {
+      this.audit.append(operationId, 'effect_step_start_claimed', {
         stepId,
         stepVersion: step.row_version + 1,
         attemptCount: step.attempt_count + 1,
@@ -290,7 +299,7 @@ export class EffectStore {
         occurredAt,
       });
       return true;
-    }).immediate();
+    });
   }
 
   private validateSteps(input: EffectStepInput[]): Array<EffectStepInput & { targetJson: string }> {
@@ -364,28 +373,4 @@ export class EffectStore {
     });
   }
 
-  private appendAudit(
-    operationId: string,
-    eventType: string,
-    payload: unknown,
-    generation: number,
-    occurredAt: string,
-    initial = false,
-  ): void {
-    const operation = this.state.database.prepare(
-      'SELECT event_sequence FROM effect_operations WHERE operation_id = ?',
-    ).get(operationId) as { event_sequence: number };
-    const sequence = operation.event_sequence + (initial ? 0 : 1);
-    if (!initial) {
-      this.state.database.prepare(`
-        UPDATE effect_operations SET event_sequence = ?, row_version = row_version + 1, updated_at = ?
-        WHERE operation_id = ?
-      `).run(sequence, occurredAt, operationId);
-    }
-    this.state.database.prepare(`
-      INSERT INTO effect_audit_events (
-        operation_id, sequence, event_type, payload_json, writer_generation, occurred_at
-      ) VALUES (?, ?, ?, ?, ?, ?)
-    `).run(operationId, sequence, eventType, canonicalJson(payload), generation, occurredAt);
-  }
 }

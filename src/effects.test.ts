@@ -122,3 +122,53 @@ test('refuses to start an intent after its job scope revision changes', () => {
     fixture.close();
   }
 });
+
+test('audits stale effect intents and starts without mutating the operation', () => {
+  const fixture = createStateFixture();
+  try {
+    const job = createJob(fixture.jobs);
+    fixture.effects.begin(beginInput(job.jobId));
+    const before = fixture.effects.get('operation-1');
+    fixture.database.prepare('UPDATE controller_writer SET generation = 2').run();
+    assert.throws(() => fixture.effects.begin(beginInput(job.jobId)), (error: unknown) => (
+      error instanceof StateError && error.code === 'STALE_GENERATION'
+    ));
+    assert.throws(() => fixture.effects.claimStepStart('operation-1', 'step-write', 1), (error: unknown) => (
+      error instanceof StateError && error.code === 'STALE_GENERATION'
+    ));
+    assert.deepEqual(fixture.effects.get('operation-1'), before);
+    assert.deepEqual(fixture.jobs.listEvents(job.jobId).slice(-2).map((event) => ({
+      type: event.eventType,
+      generation: event.writerGeneration,
+    })), [
+      { type: 'effect_intent_rejected_stale_generation', generation: 1 },
+      { type: 'effect_start_rejected_stale_generation', generation: 1 },
+    ]);
+  } finally {
+    fixture.close();
+  }
+});
+
+test('audits stale effect job versions and latches an expired writer unhealthy', () => {
+  const fixture = createStateFixture();
+  try {
+    const job = createJob(fixture.jobs);
+    fixture.effects.begin(beginInput(job.jobId));
+    const newOperation = { ...beginInput(job.jobId), operationId: 'operation-2' };
+    assert.throws(() => fixture.effects.begin(newOperation), (error: unknown) => (
+      error instanceof StateError && error.code === 'STALE_ROW_VERSION'
+    ));
+    assert.equal(fixture.jobs.listEvents(job.jobId).at(-1)?.eventType, 'effect_intent_rejected_stale_row_version');
+    const expiredAt = new Date(Date.now() - 16_000).toISOString();
+    fixture.database.prepare('UPDATE controller_writer SET heartbeat_at = ?').run(expiredAt);
+    assert.throws(() => fixture.effects.claimStepStart('operation-1', 'step-write', 1), (error: unknown) => (
+      error instanceof StateError && error.code === 'WRITER_UNHEALTHY'
+    ));
+    assert.equal(fixture.jobs.listEvents(job.jobId).at(-1)?.eventType, 'effect_start_rejected_writer_unhealthy');
+    assert.deepEqual(fixture.database.prepare('SELECT status FROM controller_writer').get(), { status: 'unhealthy' });
+    assert.equal(fixture.effects.get('operation-2'), undefined);
+    assert.equal(fixture.effects.get('operation-1')?.steps.find((step) => step.stepId === 'step-write')?.attemptCount, 0);
+  } finally {
+    fixture.close();
+  }
+});
