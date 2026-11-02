@@ -34,22 +34,36 @@ age and PID absence alone never authorize replacement.
   step identities and the intent audit event in one transaction. The caller
   must commit this intent before invoking an adapter.
 - `EffectStore.claimStepStart` atomically claims one pending step after its
-  dependencies are confirmed successful. Duplicate start claims return false.
+  dependencies are confirmed successful. It rechecks job control, scope,
+  execution version/lifecycle/ownership and matching unknown operations inside
+  the claim transaction. Paused or cancelled jobs, stopping/terminal executions
+  and replaced operations cannot start steps. Duplicate start claims return false.
   An identical operation identity and command return
   the existing state. Changed command or authorization data under the same
   identity is audited and rejected.
 - A matching action remains blocked while an earlier operation is unknown.
   Replacing it requires a new operation identity, a fresh authorization record
-  and a `replacementForOperationId` link to the single unknown operation.
+  and a `replacementForOperationId` link to the single unresolved operation
+  that has no replacement. Each predecessor accepts one successor; a successor
+  with an unknown outcome can itself be explicitly replaced. The predecessor's
+  result stays in history, while the successor determines the unknown-outcome
+  barrier. `EffectStore.get` exposes the successor as `replacementOperationId`.
 - `EffectResultStore.recordResult` records a provider receipt or reconciliation
   using the expected step version and current writer generation. A late result
   from an older generation is appended to audit history and cannot change the
   current step state. Unknown results remain visible until current-generation
-  reconciliation confirms success or failure.
+  reconciliation confirms success or failure. Every accepted result is also
+  appended with its receipt and any previous observation, so reconciliation
+  cannot erase earlier evidence.
 - `EffectResultStore.retryStep` accepts only a confirmed failure classified by
   the adapter as a safe read or confirmed not applied. It preserves the prior
   result in audit history and queues another start with the same operation and
   step identities; adapters own retry counts, backoff and jitter.
+
+Rejected stale intents, starts, results and retries are recorded in the job
+event stream and, for an existing operation, its effect audit stream in one
+transaction. Stale result rejections retain the submitted receipt as history.
+If that audit transaction fails, the call reports `AUDIT_UNAVAILABLE`.
 
 Authorization evidence and effect results are separate immutable/observed
 records. Audit history is append-only. Persist only structured receipts and

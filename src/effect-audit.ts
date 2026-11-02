@@ -1,8 +1,27 @@
 import { canonicalJson } from './effect-model.js';
-import type { StateContext } from './state-common.js';
+import type { StateContext, StateError } from './state-common.js';
 
 export class EffectAuditLog {
   constructor(private readonly state: StateContext) {}
+
+  reject(
+    operationId: string,
+    action: string,
+    error: StateError,
+    generation: number,
+    occurredAt: string,
+    details: Record<string, unknown>,
+  ): void {
+    const existing = this.state.database.prepare(
+      'SELECT 1 AS found FROM effect_operations WHERE operation_id = ?',
+    ).get(operationId);
+    if (!existing) return;
+    this.append(operationId, `${action}_rejected_${error.code.toLowerCase()}`, {
+      ...details,
+      code: error.code,
+      message: error.message,
+    }, generation, occurredAt);
+  }
 
   append(
     operationId: string,

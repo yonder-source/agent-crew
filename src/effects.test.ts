@@ -124,7 +124,7 @@ test('refuses to start an intent after its job scope revision changes', () => {
   }
 });
 
-test('audits stale effect intents and starts without mutating the operation', () => {
+test('audits stale effect requests without changing their outcomes or steps', () => {
   const fixture = createStateFixture();
   try {
     const job = createJob(fixture.jobs);
@@ -137,14 +137,57 @@ test('audits stale effect intents and starts without mutating the operation', ()
     assert.throws(() => fixture.effects.claimStepStart('operation-1', 'step-write', 1), (error: unknown) => (
       error instanceof StateError && error.code === 'STALE_GENERATION'
     ));
-    assert.deepEqual(fixture.effects.get('operation-1'), before);
-    assert.deepEqual(fixture.jobs.listEvents(job.jobId).slice(-2).map((event) => ({
+    assert.throws(() => fixture.effectResults.recordResult({
+      operationId: 'operation-1', stepId: 'step-write', expectedStepVersion: 1,
+      status: 'confirmed_success', result: { receiptId: 'late-receipt' }, resultGeneration: 1,
+      resultSource: 'provider_receipt', writerGeneration: 1,
+    }), (error: unknown) => error instanceof StateError && error.code === 'STALE_GENERATION');
+    assert.throws(() => fixture.effectResults.retryStep({
+      operationId: 'operation-1', stepId: 'step-write', expectedStepVersion: 1,
+      safetyClassification: 'confirmed_not_applied', writerGeneration: 1,
+    }), (error: unknown) => error instanceof StateError && error.code === 'STALE_GENERATION');
+    const after = fixture.effects.get('operation-1');
+    assert.deepEqual(after?.steps, before?.steps);
+    assert.deepEqual(after?.authorization, before?.authorization);
+    assert.equal(after?.operation.status, before?.operation.status);
+    const rejections = fixture.effects.listAudit('operation-1').slice(-4);
+    assert.deepEqual(rejections.map((event) => event.eventType), [
+      'effect_intent_rejected_stale_generation', 'effect_start_rejected_stale_generation',
+      'effect_result_rejected_stale_generation', 'effect_retry_rejected_stale_generation',
+    ]);
+    assert.equal(JSON.parse(rejections[1]?.payloadJson ?? '{}').stepId, 'step-write');
+    assert.equal(JSON.parse(rejections[2]?.payloadJson ?? '{}').result.receiptId, 'late-receipt');
+    assert.deepEqual(fixture.jobs.listEvents(job.jobId).slice(-4).map((event) => ({
       type: event.eventType,
       generation: event.writerGeneration,
     })), [
       { type: 'effect_intent_rejected_stale_generation', generation: 1 },
       { type: 'effect_start_rejected_stale_generation', generation: 1 },
+      { type: 'effect_result_rejected_stale_generation', generation: 1 },
+      { type: 'effect_retry_rejected_stale_generation', generation: 1 },
     ]);
+  } finally {
+    fixture.close();
+  }
+});
+
+test('fails closed when the rejection audit cannot be committed atomically', () => {
+  const fixture = createStateFixture();
+  try {
+    const job = createJob(fixture.jobs);
+    fixture.effects.begin(beginInput(job.jobId));
+    const before = fixture.jobs.get(job.jobId);
+    fixture.database.prepare('UPDATE controller_writer SET generation = 2').run();
+    fixture.database.exec(`
+      CREATE TRIGGER reject_stale_audit BEFORE INSERT ON effect_audit_events
+      WHEN NEW.event_type = 'effect_start_rejected_stale_generation'
+      BEGIN SELECT RAISE(ABORT, 'audit unavailable'); END;
+    `);
+    assert.throws(() => fixture.effects.claimStepStart('operation-1', 'step-write', 1), (error: unknown) => (
+      error instanceof StateError && error.code === 'AUDIT_UNAVAILABLE'
+    ));
+    assert.deepEqual(fixture.jobs.get(job.jobId), before);
+    assert.equal(fixture.effects.get('operation-1')?.steps.find((step) => step.stepId === 'step-write')?.attemptCount, 0);
   } finally {
     fixture.close();
   }

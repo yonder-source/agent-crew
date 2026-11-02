@@ -198,7 +198,9 @@ export class EffectStore {
         occurredAt,
       });
       return { duplicate: false, conflict: false, blocked: false };
-    });
+    }, (error) => this.audit.reject(input.operationId, 'effect_intent', error, input.writerGeneration, occurredAt, {
+      attemptedArgumentFingerprint: argumentFingerprint,
+    }));
 
     if (result.conflict) throw new StateError('OPERATION_ID_CONFLICT', 'Operation identity was reused with changed command or authorization data');
     if (result.blocked) throw new StateError('UNKNOWN_EFFECT_BLOCKS_DUPLICATE', 'An unknown effect must be reconciled or explicitly replaced before a matching action can start');
@@ -350,7 +352,7 @@ export class EffectStore {
         occurredAt,
       });
       return true;
-    });
+    }, (error) => this.audit.reject(operationId, 'effect_start', error, writerGeneration, occurredAt, { stepId }));
   }
 
   private listUnknownOperations(operationKind: string, targetJson: string, excludedOperationId: string): Array<{

@@ -145,6 +145,13 @@ export class EffectResultStore {
         });
         return { historyOnly: false };
       },
+      (error) => this.audit.reject(input.operationId, 'effect_result', error, input.writerGeneration, occurredAt, {
+        stepId: input.stepId,
+        observedStatus: input.status,
+        resultGeneration: input.resultGeneration,
+        resultSource: input.resultSource,
+        result: JSON.parse(resultJson) as unknown,
+      }),
     );
     const updatedStep = this.effects.get(input.operationId)?.steps.find((step) => step.stepId === input.stepId);
     if (!updatedStep) throw new StateError('STEP_NOT_FOUND', 'Effect step does not exist');
@@ -246,6 +253,10 @@ export class EffectResultStore {
         });
         return { rejected: undefined };
       },
+      (error) => this.audit.reject(input.operationId, 'effect_retry', error, input.writerGeneration, occurredAt, {
+        stepId: input.stepId,
+        safetyClassification: input.safetyClassification,
+      }),
     );
     if (result.rejected === 'STALE_ROW_VERSION') {
       throw new StateError('STALE_ROW_VERSION', 'Effect step changed before retry authorization');

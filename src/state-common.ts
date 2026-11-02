@@ -233,6 +233,7 @@ export class StateContext {
     occurredAt: string,
     operation: string,
     action: () => T,
+    recordRejection?: (error: StateError) => void,
   ): T {
     try {
       return this.database.transaction(action).immediate();
@@ -250,6 +251,7 @@ export class StateContext {
           }
           const job = this.getJobOrThrow(jobId);
           this.appendRejectedEvent(job, operation, generation, error, occurredAt);
+          recordRejection?.(error);
         }).immediate();
       } catch {
         throw new StateError('AUDIT_UNAVAILABLE', 'Rejected state mutation could not be recorded');
