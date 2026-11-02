@@ -10,6 +10,7 @@ RUN npm ci
 
 COPY tsconfig.json ./
 COPY scripts ./scripts
+COPY .github/ISSUE_TEMPLATE/agent-task.yml .github/ISSUE_TEMPLATE/agent-task.yml
 COPY src ./src
 
 CMD ["npm", "run", "check"]

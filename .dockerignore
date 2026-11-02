@@ -6,3 +6,6 @@
 !src/**
 !scripts/
 !scripts/**
+!.github/
+!.github/ISSUE_TEMPLATE/
+!.github/ISSUE_TEMPLATE/agent-task.yml

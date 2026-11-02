@@ -1,0 +1,1 @@
+export const AGENT_TASK_TEMPLATE_VERSION = '1';
