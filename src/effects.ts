@@ -82,11 +82,7 @@ export class EffectStore {
       if (job.scope_revision_id !== input.scopeRevisionId) {
         throw new StateError('STALE_SCOPE_REVISION', 'Effect scope does not match the current job scope');
       }
-      const unresolved = this.state.database.prepare(`
-        SELECT operation_id, job_id FROM effect_operations
-        WHERE operation_kind = ? AND target_json = ? AND status = 'unknown'
-        ORDER BY created_at, operation_id
-      `).all(input.operationKind, targetJson) as Array<{ operation_id: string; job_id: string }>;
+      const unresolved = this.listUnknownOperations(input.operationKind, targetJson, input.operationId);
       const replacementIsExplicit = input.replacementForOperationId !== undefined
         && unresolved.length === 1
         && unresolved[0]?.operation_id === input.replacementForOperationId
@@ -252,12 +248,14 @@ export class EffectStore {
       this.state.assertWriter(writerGeneration, occurredAt);
       const step = this.state.database.prepare(`
         SELECT step.*, operation.job_id, operation.writer_generation, operation.scope_revision_id,
-          operation.execution_id, operation.expected_execution_version
+          operation.execution_id, operation.expected_execution_version, operation.operation_kind,
+          operation.target_json AS operation_target_json, operation.replacement_for_operation_id
         FROM effect_steps step JOIN effect_operations operation USING (operation_id)
         WHERE step.operation_id = ? AND step.step_id = ?
       `).get(operationId, stepId) as (
         RawStep & Pick<RawOperation, 'job_id' | 'writer_generation' | 'scope_revision_id'
-          | 'execution_id' | 'expected_execution_version'>
+          | 'execution_id' | 'expected_execution_version' | 'operation_kind' | 'replacement_for_operation_id'>
+          & { operation_target_json: string }
       ) | undefined;
       if (
         step?.status !== 'pending'
@@ -298,6 +296,15 @@ export class EffectStore {
           return false;
         }
       }
+      const unknownConflicts = this.listUnknownOperations(step.operation_kind, step.operation_target_json, operationId)
+        .filter((operation) => operation.operation_id !== step.replacement_for_operation_id);
+      if (unknownConflicts.length > 0) {
+        this.audit.append(operationId, 'effect_step_start_rejected_unknown_conflict', {
+          stepId,
+          conflictingOperationIds: unknownConflicts.map((operation) => operation.operation_id),
+        }, writerGeneration, occurredAt);
+        return false;
+      }
       const blockedDependency = this.state.database.prepare(`
         SELECT 1 AS blocked
         FROM effect_step_dependencies dependency
@@ -331,6 +338,17 @@ export class EffectStore {
       });
       return true;
     });
+  }
+
+  private listUnknownOperations(operationKind: string, targetJson: string, excludedOperationId: string): Array<{
+    operation_id: string;
+    job_id: string;
+  }> {
+    return this.state.database.prepare(`
+      SELECT operation_id, job_id FROM effect_operations
+      WHERE operation_kind = ? AND target_json = ? AND status = 'unknown' AND operation_id <> ?
+      ORDER BY created_at, operation_id
+    `).all(operationKind, targetJson, excludedOperationId) as Array<{ operation_id: string; job_id: string }>;
   }
 
   private validateSteps(input: EffectStepInput[]): Array<EffectStepInput & { targetJson: string }> {

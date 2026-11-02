@@ -97,6 +97,7 @@ test('blocks a new matching operation until it explicitly replaces an unknown on
     const accepted = effects.begin(replacement);
     assert.equal(accepted.view.operation.replacementForOperationId, 'operation-1');
     assert.equal(accepted.view.authorization.callerIdentity, 'human:456');
+    assert.equal(effects.claimStepStart('operation-2', 'step-write-replacement', 1), true);
   } finally {
     fixture.close();
   }
