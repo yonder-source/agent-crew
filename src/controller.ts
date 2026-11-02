@@ -2,6 +2,7 @@ import { createServer, type Server } from 'node:http';
 import pino, { type Logger } from 'pino';
 import type { ControllerConfig } from './config.js';
 import { getSchemaVersion, openDatabase } from './database.js';
+import { WriterCoordinator } from './writer.js';
 
 export type RunningController = {
   server: Server;
@@ -19,10 +20,24 @@ export async function startController(
 ): Promise<RunningController> {
   const database = openDatabase(config.databasePath);
   const schemaVersion = getSchemaVersion(database);
+  let writer: WriterCoordinator;
+  try {
+    writer = await WriterCoordinator.start(database);
+  } catch (error) {
+    database.close();
+    throw error;
+  }
   const server = createServer((request, response) => {
     if (request.method === 'GET' && request.url === '/healthz') {
-      response.writeHead(200, { 'content-type': 'application/json; charset=utf-8' });
-      response.end(JSON.stringify({ status: 'ok', schemaVersion }));
+      const currentWriter = writer.status();
+      const healthy = currentWriter.status === 'healthy';
+      response.writeHead(healthy ? 200 : 503, { 'content-type': 'application/json; charset=utf-8' });
+      response.end(JSON.stringify({
+        status: healthy ? 'ok' : 'unhealthy',
+        schemaVersion,
+        writerGeneration: currentWriter.generation,
+        writerStatus: currentWriter.status,
+      }));
       return;
     }
 
@@ -40,12 +55,14 @@ export async function startController(
       });
     });
   } catch (error) {
+    writer.stop();
     database.close();
     throw error;
   }
 
   const listenerAddress = server.address();
   if (!listenerAddress || typeof listenerAddress === 'string') {
+    writer.stop();
     database.close();
     throw new Error('Controller did not bind a TCP address');
   }
@@ -56,6 +73,7 @@ export async function startController(
   const close = (): Promise<void> => {
     closePromise ??= new Promise<void>((resolveClose, rejectClose) => {
       server.close((error) => {
+        writer.stop();
         database.close();
         if (error) {
           rejectClose(error);

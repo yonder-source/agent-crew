@@ -18,7 +18,12 @@ test('serves health and closes its database connection cleanly', async () => {
   try {
     const response = await fetch(`${controller.address}/healthz`);
     assert.equal(response.status, 200);
-    assert.deepEqual(await response.json(), { status: 'ok', schemaVersion: 2 });
+    assert.deepEqual(await response.json(), {
+      status: 'ok',
+      schemaVersion: 2,
+      writerGeneration: 1,
+      writerStatus: 'healthy',
+    });
 
     const missing = await fetch(`${controller.address}/`);
     assert.equal(missing.status, 404);
