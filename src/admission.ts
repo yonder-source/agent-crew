@@ -42,6 +42,7 @@ export type AdmissionInput = {
 	issueIsOpen: boolean;
 	repositoryBindingValid: boolean;
 	authorizedApproverIdentities: string[];
+	authorizedPrerequisiteConfirmerIdentities: string[];
 	currentPolicyVersion: string;
 	nativeDependencyIssueIds: string[];
 	prerequisiteStates: Record<string, PrerequisiteState>;
@@ -99,6 +100,10 @@ function dependencyCycle(
 
 export class AdmissionStore {
 	constructor(private readonly state: StateContext) {}
+
+	getReadinessHeadVersion(repositoryId: string, issueId: string): number {
+		return this.getReadinessHead(repositoryId, issueId)?.head_version ?? 0;
+	}
 
 	recordReadinessObservation(input: ReadinessObservationInput): {
 		headVersion: number;
@@ -435,6 +440,8 @@ export class AdmissionStore {
 						(item) => item.scope_revision_id !== input.scopeRevisionId,
 					)
 				) {
+					if (distinctApproval.length > 1)
+						return decide("blocked", "readiness_evidence_conflict");
 					return decide("stale", "approval_revision_stale");
 				}
 				if (
@@ -475,7 +482,14 @@ export class AdmissionStore {
 							return true;
 						return kind === "coding"
 							? proof.evidenceKind !== "merged_pr"
-							: proof.evidenceKind !== "authorized_human_confirmation";
+							: proof.evidenceKind !== "authorized_human_confirmation" ||
+									!this.hasCurrentPrerequisiteConfirmation(
+										input.repositoryId,
+										dependencyId,
+										proof.evidenceId,
+										proof.sourceRevisionId,
+										input.authorizedPrerequisiteConfirmerIdentities,
+									);
 					})
 				) {
 					return decide("blocked", "dependency_incomplete");
@@ -586,5 +600,40 @@ export class AdmissionStore {
       WHERE h.repository_id = ? AND h.issue_id = ?
     `)
 			.get(repositoryId, issueId) as RawCurrentObservation | undefined;
+	}
+
+	private hasCurrentPrerequisiteConfirmation(
+		repositoryId: string,
+		issueId: string,
+		confirmationId: string,
+		sourceRevisionId: string,
+		authorizedHumanIdentities: string[],
+	): boolean {
+		const confirmation = this.state.database
+			.prepare(`
+					SELECT confirmation.confirmed_by
+					FROM prerequisite_confirmations confirmation
+					JOIN issue_scope_revisions revision
+					  ON revision.scope_revision_id = confirmation.scope_revision_id
+					JOIN issue_read_heads head
+					  ON head.repository_id = confirmation.repository_id
+				 AND head.issue_id = confirmation.issue_id
+			JOIN issue_read_observations observation
+			  ON observation.observation_id = head.observation_id
+					WHERE confirmation.confirmation_id = ?
+			  AND confirmation.repository_id = ?
+			  AND confirmation.issue_id = ?
+			  AND revision.source_revision_id = ?
+			  AND observation.status = 'complete'
+			  AND observation.scope_revision_id = confirmation.scope_revision_id
+			LIMIT 1
+				`)
+			.get(confirmationId, repositoryId, issueId, sourceRevisionId) as
+			| { confirmed_by: string }
+			| undefined;
+		return (
+			confirmation !== undefined &&
+			authorizedHumanIdentities.includes(confirmation.confirmed_by)
+		);
 	}
 }

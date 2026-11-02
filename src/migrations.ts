@@ -1,13 +1,13 @@
-import type Database from 'better-sqlite3';
-import type { Migration } from './database.js';
+import type Database from "better-sqlite3";
+import type { Migration } from "./database.js";
 
 export const controllerMigrations: Migration[] = [
-  { version: 1, name: 'controller-foundation', up: () => undefined },
-  {
-    version: 2,
-    name: 'durable-workflow-state',
-    up: (database: Database.Database) => {
-      database.exec(`
+	{ version: 1, name: "controller-foundation", up: () => undefined },
+	{
+		version: 2,
+		name: "durable-workflow-state",
+		up: (database: Database.Database) => {
+			database.exec(`
         CREATE TABLE controller_writer (
           singleton_id INTEGER PRIMARY KEY CHECK (singleton_id = 1),
           generation INTEGER NOT NULL CHECK (generation >= 0),
@@ -109,13 +109,13 @@ export const controllerMigrations: Migration[] = [
         CREATE UNIQUE INDEX job_usage_metric ON usage_counters(job_id, metric) WHERE job_id IS NOT NULL;
         CREATE UNIQUE INDEX execution_usage_metric ON usage_counters(execution_id, metric) WHERE execution_id IS NOT NULL;
       `);
-    },
-  },
-  {
-    version: 3,
-    name: 'effect-intent-and-receipts',
-    up: (database: Database.Database) => {
-      database.exec(`
+		},
+	},
+	{
+		version: 3,
+		name: "effect-intent-and-receipts",
+		up: (database: Database.Database) => {
+			database.exec(`
         CREATE TABLE effect_operations (
           operation_id TEXT PRIMARY KEY CHECK (length(operation_id) > 0),
           job_id TEXT NOT NULL REFERENCES jobs(job_id),
@@ -218,36 +218,36 @@ export const controllerMigrations: Migration[] = [
           SELECT RAISE(ABORT, 'effect audit history is append-only');
         END;
       `);
-    },
-  },
-  {
-    version: 4,
-    name: 'effect-operation-replacement-link',
-    up: (database: Database.Database) => {
-      database.exec(`
+		},
+	},
+	{
+		version: 4,
+		name: "effect-operation-replacement-link",
+		up: (database: Database.Database) => {
+			database.exec(`
         ALTER TABLE effect_operations
         ADD COLUMN replacement_for_operation_id TEXT REFERENCES effect_operations(operation_id);
       `);
-    },
-  },
-  {
-    version: 5,
-    name: 'effect-step-start-claims',
-    up: (database: Database.Database) => {
-      database.exec(`
+		},
+	},
+	{
+		version: 5,
+		name: "effect-step-start-claims",
+		up: (database: Database.Database) => {
+			database.exec(`
         ALTER TABLE effect_steps
         ADD COLUMN started_generation INTEGER CHECK (started_generation IS NULL OR started_generation > 0);
         ALTER TABLE effect_steps ADD COLUMN started_at TEXT;
         ALTER TABLE effect_steps
         ADD COLUMN attempt_count INTEGER NOT NULL DEFAULT 0 CHECK (attempt_count >= 0);
       `);
-    },
-  },
-  {
-    version: 6,
-    name: 'issue-scope-and-read-observations',
-    up: (database: Database.Database) => {
-      database.exec(`
+		},
+	},
+	{
+		version: 6,
+		name: "issue-scope-and-read-observations",
+		up: (database: Database.Database) => {
+			database.exec(`
         CREATE TABLE issue_scope_revisions (
           scope_revision_id TEXT PRIMARY KEY CHECK (length(scope_revision_id) > 0),
           repository_id TEXT NOT NULL CHECK (length(repository_id) > 0),
@@ -320,13 +320,13 @@ export const controllerMigrations: Migration[] = [
         END;
 
       `);
-    },
-  },
-  {
-    version: 7,
-    name: 'issue-readiness-evidence',
-    up: (database: Database.Database) => {
-      database.exec(`
+		},
+	},
+	{
+		version: 7,
+		name: "issue-readiness-evidence",
+		up: (database: Database.Database) => {
+			database.exec(`
         CREATE TABLE readiness_evidence (
           evidence_id TEXT PRIMARY KEY CHECK (length(evidence_id) > 0),
           repository_id TEXT NOT NULL CHECK (length(repository_id) > 0),
@@ -367,13 +367,13 @@ export const controllerMigrations: Migration[] = [
           SELECT RAISE(ABORT, 'readiness evidence is immutable');
         END;
       `);
-    },
-  },
-  {
-    version: 8,
-    name: 'readiness-current-state-and-admission-decisions',
-    up: (database: Database.Database) => {
-      database.exec(`
+		},
+	},
+	{
+		version: 8,
+		name: "readiness-current-state-and-admission-decisions",
+		up: (database: Database.Database) => {
+			database.exec(`
         CREATE TABLE readiness_observations (
           observation_id TEXT PRIMARY KEY CHECK (length(observation_id) > 0),
           repository_id TEXT NOT NULL CHECK (length(repository_id) > 0),
@@ -438,7 +438,7 @@ export const controllerMigrations: Migration[] = [
           SELECT RAISE(ABORT, 'admission decisions are immutable');
         END;
       `);
-      database.exec(`
+			database.exec(`
         CREATE TEMP TABLE issue_read_heads_v7_backup AS SELECT * FROM issue_read_heads;
         DROP TABLE issue_read_heads;
         CREATE TABLE issue_read_observations_v8 (
@@ -566,6 +566,39 @@ export const controllerMigrations: Migration[] = [
           SELECT RAISE(ABORT, 'intake rejection history is append-only');
         END;
       `);
-    },
-  },
+		},
+	},
+	{
+		version: 9,
+		name: "authorized-prerequisite-confirmations",
+		up: (database: Database.Database) => {
+			database.exec(`
+        CREATE TABLE prerequisite_confirmations (
+          confirmation_id TEXT PRIMARY KEY CHECK (length(confirmation_id) > 0),
+          repository_id TEXT NOT NULL CHECK (length(repository_id) > 0),
+          issue_id TEXT NOT NULL CHECK (length(issue_id) > 0),
+          scope_revision_id TEXT NOT NULL REFERENCES issue_scope_revisions(scope_revision_id),
+          confirmed_by TEXT NOT NULL CHECK (length(confirmed_by) > 0),
+          authority_evidence_json TEXT NOT NULL,
+          writer_generation INTEGER NOT NULL CHECK (writer_generation > 0),
+          confirmed_at TEXT NOT NULL
+        ) STRICT;
+
+        CREATE INDEX prerequisite_confirmations_scope_idx
+        ON prerequisite_confirmations (repository_id, issue_id, scope_revision_id);
+
+        CREATE TRIGGER prerequisite_confirmations_prevent_update
+        BEFORE UPDATE ON prerequisite_confirmations
+        BEGIN
+          SELECT RAISE(ABORT, 'prerequisite confirmations are immutable');
+        END;
+
+        CREATE TRIGGER prerequisite_confirmations_prevent_delete
+        BEFORE DELETE ON prerequisite_confirmations
+        BEGIN
+          SELECT RAISE(ABORT, 'prerequisite confirmations are immutable');
+        END;
+      `);
+		},
+	},
 ];

@@ -13,7 +13,7 @@ test("initializes an empty database and safely reopens it", () => {
 
 	try {
 		const first = openDatabase(path);
-		assert.equal(getSchemaVersion(first), 8);
+		assert.equal(getSchemaVersion(first), 9);
 		assert.equal(first.pragma("journal_mode", { simple: true }), "wal");
 		assert.equal(first.pragma("synchronous", { simple: true }), 2);
 		assert.equal(first.pragma("busy_timeout", { simple: true }), 5_000);
@@ -35,7 +35,7 @@ test("initializes an empty database and safely reopens it", () => {
 		first.close();
 
 		const second = openDatabase(path);
-		assert.equal(getSchemaVersion(second), 8);
+		assert.equal(getSchemaVersion(second), 9);
 		assert.ok(
 			second
 				.prepare(
@@ -140,7 +140,7 @@ test("schema includes unattributable snapshots and preserves issue read heads", 
 			.run();
 
 		runMigrations(database, controllerMigrations);
-		assert.equal(getSchemaVersion(database), 8);
+		assert.equal(getSchemaVersion(database), 9);
 		assert.equal(
 			(
 				database
@@ -183,6 +183,13 @@ test("schema includes unattributable snapshots and preserves issue read heads", 
 			database
 				.prepare(
 					"SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'unattributed_issue_snapshots'",
+				)
+				.get(),
+		);
+		assert.ok(
+			database
+				.prepare(
+					"SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'prerequisite_confirmations'",
 				)
 				.get(),
 		);

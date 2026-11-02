@@ -3,6 +3,7 @@ import test from "node:test";
 import { AdmissionStore, type AdmissionInput } from "./admission.js";
 import { IssueScopeStore } from "./issue-scopes.js";
 import { ReadinessEvidenceStore } from "./readiness.js";
+import { PrerequisiteConfirmationStore } from "./prerequisite-confirmations.js";
 import { createStateFixture } from "./state-fixture.js";
 
 const time = "2026-11-02T00:00:00.000Z";
@@ -67,6 +68,7 @@ function input(overrides: Partial<AdmissionInput> = {}): AdmissionInput {
 		issueIsOpen: true,
 		repositoryBindingValid: true,
 		authorizedApproverIdentities: ["github-user:42"],
+		authorizedPrerequisiteConfirmerIdentities: ["github-user:42"],
 		currentPolicyVersion: "policy-1",
 		nativeDependencyIssueIds: [],
 		prerequisiteStates: {},
@@ -449,6 +451,108 @@ test("requires native dependency completion evidence and rejects dependency cycl
 	}
 });
 
+test("requires durable authorized human confirmation for a non-coding prerequisite", () => {
+	const fixture = createStateFixture();
+	try {
+		const admission = prepareAdmission(fixture, ["issue-2"]);
+		const candidate = input({
+			nativeDependencyIssueIds: ["issue-2"],
+			dependencyKinds: { "issue-2": "non_coding" },
+			dependencyGraph: { "issue-1": ["issue-2"] },
+			prerequisiteStates: {
+				"issue-2": {
+					status: "complete",
+					evidenceId: "confirmation-2",
+					evidenceKind: "authorized_human_confirmation",
+					sourceRevisionId: "github-rev-2",
+				},
+			},
+		});
+		assert.equal(
+			admission.admit(candidate).reasonCode,
+			"dependency_incomplete",
+		);
+
+		new IssueScopeStore(fixture.state).recordCompleteRead({
+			observationId: "issue-read-2",
+			scopeRevisionId: "scope-2",
+			repositoryId: "repo-1",
+			issueId: "issue-2",
+			sourceRevisionId: "github-rev-2",
+			title: "Non-coding prerequisite",
+			body: "Confirmed manually",
+			dependencyIssueIds: [],
+			templateVersion: "1",
+			policyVersion: "policy-1",
+			observedAt: time,
+			expectedHeadVersion: 0,
+			writerGeneration: 1,
+		});
+		new PrerequisiteConfirmationStore(fixture.state).confirm({
+			confirmationId: "confirmation-2",
+			repositoryId: "repo-1",
+			issueId: "issue-2",
+			scopeRevisionId: "scope-2",
+			confirmedBy: "github-user:42",
+			authorizedHumanIdentities: ["github-user:42"],
+			authorityEvidence: { role: "maintainer" },
+			writerGeneration: 1,
+		});
+		assert.throws(
+			() =>
+				new PrerequisiteConfirmationStore(fixture.state).confirm({
+					confirmationId: "unauthorized-confirmation",
+					repositoryId: "repo-1",
+					issueId: "issue-2",
+					scopeRevisionId: "scope-2",
+					confirmedBy: "github-user:99",
+					authorizedHumanIdentities: ["github-user:42"],
+					authorityEvidence: {},
+					writerGeneration: 1,
+				}),
+			{ code: "CONFIRMER_UNAUTHORIZED" },
+		);
+
+		assert.equal(
+			admission.admit({ ...candidate, decisionId: "decision-confirmed" })
+				.outcome,
+			"admitted",
+		);
+		assert.equal(
+			admission.admit({
+				...candidate,
+				decisionId: "decision-confirmation-revoked",
+				authorizedPrerequisiteConfirmerIdentities: [],
+			}).reasonCode,
+			"dependency_incomplete",
+		);
+		new IssueScopeStore(fixture.state).recordCompleteRead({
+			observationId: "issue-read-2-changed",
+			scopeRevisionId: "scope-3",
+			repositoryId: "repo-1",
+			issueId: "issue-2",
+			sourceRevisionId: "github-rev-3",
+			title: "Non-coding prerequisite changed",
+			body: "Changed after confirmation",
+			dependencyIssueIds: [],
+			templateVersion: "1",
+			policyVersion: "policy-1",
+			observedAt: time,
+			expectedHeadVersion: 1,
+			writerGeneration: 1,
+		});
+		assert.equal(
+			admission.admit({
+				...candidate,
+				decisionId: "decision-confirmation-stale",
+			}).reasonCode,
+			"dependency_incomplete",
+		);
+	} finally {
+		fixture.close();
+	}
+});
+
 test("requires merged pull request proof for coding dependencies and honors capacity", () => {
 	const fixture = createStateFixture();
 	try {
@@ -529,6 +633,49 @@ test("requires both readiness sources to agree and records the blocker", () => {
 			).outcome,
 			"blocked",
 		);
+	} finally {
+		fixture.close();
+	}
+});
+
+test("blocks GitHub and Slack readiness evidence that names different revisions", () => {
+	const fixture = createStateFixture();
+	try {
+		const admission = prepareAdmission(fixture);
+		new IssueScopeStore(fixture.state).recordCompleteRead({
+			observationId: "issue-read-superseded",
+			scopeRevisionId: "scope-2",
+			repositoryId: "repo-1",
+			issueId: "issue-1",
+			sourceRevisionId: "github-rev-2",
+			title: "Task changed",
+			body: "Changed scope",
+			dependencyIssueIds: [],
+			templateVersion: "1",
+			policyVersion: "policy-1",
+			observedAt: time,
+			expectedHeadVersion: 0,
+			writerGeneration: 1,
+		});
+		new ReadinessEvidenceStore(fixture.state).record({
+			evidenceId: "approval-slack-revision-2",
+			repositoryId: "repo-1",
+			issueId: "issue-1",
+			scopeRevisionId: "scope-2",
+			source: "slack_approval",
+			approverIdentity: "github-user:42",
+			authorityEvidence: { role: "maintainer" },
+			slackConversationId: "thread-1",
+			slackApprovalReceiptId: "approval-receipt-2",
+			labelWriteOperationId: "label-write-2",
+			labelPresent: true,
+			observedAt: time,
+			writerGeneration: 1,
+		});
+
+		const result = admission.admit(input());
+		assert.equal(result.outcome, "blocked");
+		assert.equal(result.reasonCode, "readiness_evidence_conflict");
 	} finally {
 		fixture.close();
 	}

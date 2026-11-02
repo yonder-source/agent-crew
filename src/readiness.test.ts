@@ -103,6 +103,23 @@ test("rejects evidence whose issue binding does not match the saved scope revisi
 	}
 });
 
+test("rejects evidence whose repository binding does not match the saved scope revision", () => {
+	const fixture = createStateFixture();
+	try {
+		createRevision(fixture);
+		assert.throws(
+			() =>
+				new ReadinessEvidenceStore(fixture.state).record({
+					...baseEvidence,
+					repositoryId: "repo-other",
+				}),
+			{ code: "SCOPE_BINDING_MISMATCH" },
+		);
+	} finally {
+		fixture.close();
+	}
+});
+
 test("rejects incomplete Slack evidence and prevents evidence mutation", () => {
 	const fixture = createStateFixture();
 	try {
