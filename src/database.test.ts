@@ -12,15 +12,17 @@ test('initializes an empty database and safely reopens it', () => {
 
   try {
     const first = openDatabase(path);
-    assert.equal(getSchemaVersion(first), 5);
+    assert.equal(getSchemaVersion(first), 6);
     assert.equal(first.pragma('journal_mode', { simple: true }), 'wal');
     assert.equal(first.pragma('synchronous', { simple: true }), 2);
     assert.equal(first.pragma('busy_timeout', { simple: true }), 5_000);
     assert.equal(first.pragma('foreign_keys', { simple: true }), 1);
+    assert.ok(first.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'issue_scope_revisions'").get());
+    assert.ok(first.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'issue_read_observations'").get());
     first.close();
 
     const second = openDatabase(path);
-    assert.equal(getSchemaVersion(second), 5);
+    assert.equal(getSchemaVersion(second), 6);
     second.close();
   } finally {
     rmSync(directory, { recursive: true, force: true });

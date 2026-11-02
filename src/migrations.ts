@@ -243,4 +243,82 @@ export const controllerMigrations: Migration[] = [
       `);
     },
   },
+  {
+    version: 6,
+    name: 'issue-scope-and-read-observations',
+    up: (database: Database.Database) => {
+      database.exec(`
+        CREATE TABLE issue_scope_revisions (
+          scope_revision_id TEXT PRIMARY KEY CHECK (length(scope_revision_id) > 0),
+          repository_id TEXT NOT NULL CHECK (length(repository_id) > 0),
+          issue_id TEXT NOT NULL CHECK (length(issue_id) > 0),
+          source_revision_id TEXT NOT NULL CHECK (length(source_revision_id) > 0),
+          content_fingerprint TEXT NOT NULL CHECK (length(content_fingerprint) = 64),
+          title TEXT NOT NULL CHECK (length(title) > 0),
+          body TEXT NOT NULL,
+          dependency_issue_ids_json TEXT NOT NULL,
+          template_version TEXT NOT NULL CHECK (length(template_version) > 0),
+          policy_version TEXT NOT NULL CHECK (length(policy_version) > 0),
+          observed_at TEXT NOT NULL,
+          created_generation INTEGER NOT NULL CHECK (created_generation > 0),
+          UNIQUE (repository_id, issue_id, content_fingerprint)
+        ) STRICT;
+
+        CREATE TABLE issue_read_observations (
+          observation_id TEXT PRIMARY KEY CHECK (length(observation_id) > 0),
+          repository_id TEXT NOT NULL CHECK (length(repository_id) > 0),
+          issue_id TEXT NOT NULL CHECK (length(issue_id) > 0),
+          observation_sequence INTEGER NOT NULL CHECK (observation_sequence > 0),
+          based_on_head_version INTEGER NOT NULL CHECK (based_on_head_version >= 0),
+          status TEXT NOT NULL CHECK (status IN (
+            'complete', 'unavailable', 'incomplete', 'binding_mismatch', 'superseded'
+          )),
+          scope_revision_id TEXT REFERENCES issue_scope_revisions(scope_revision_id),
+          source_revision_id TEXT,
+          content_fingerprint TEXT CHECK (content_fingerprint IS NULL OR length(content_fingerprint) = 64),
+          observed_at TEXT NOT NULL,
+          writer_generation INTEGER NOT NULL CHECK (writer_generation > 0),
+          UNIQUE (repository_id, issue_id, observation_sequence),
+          CHECK (
+            (status IN ('complete', 'superseded') AND scope_revision_id IS NOT NULL
+              AND source_revision_id IS NOT NULL AND content_fingerprint IS NOT NULL)
+            OR (status IN ('unavailable', 'incomplete', 'binding_mismatch')
+              AND scope_revision_id IS NULL AND source_revision_id IS NULL AND content_fingerprint IS NULL)
+          )
+        ) STRICT;
+
+        CREATE TABLE issue_read_heads (
+          repository_id TEXT NOT NULL,
+          issue_id TEXT NOT NULL,
+          head_version INTEGER NOT NULL CHECK (head_version > 0),
+          observation_id TEXT NOT NULL UNIQUE REFERENCES issue_read_observations(observation_id),
+          PRIMARY KEY (repository_id, issue_id)
+        ) STRICT;
+
+        CREATE TRIGGER issue_scope_revisions_prevent_update
+        BEFORE UPDATE ON issue_scope_revisions
+        BEGIN
+          SELECT RAISE(ABORT, 'issue scope revisions are immutable');
+        END;
+
+        CREATE TRIGGER issue_scope_revisions_prevent_delete
+        BEFORE DELETE ON issue_scope_revisions
+        BEGIN
+          SELECT RAISE(ABORT, 'issue scope revisions are immutable');
+        END;
+
+        CREATE TRIGGER issue_read_observations_prevent_update
+        BEFORE UPDATE ON issue_read_observations
+        BEGIN
+          SELECT RAISE(ABORT, 'issue read observations are append-only');
+        END;
+
+        CREATE TRIGGER issue_read_observations_prevent_delete
+        BEFORE DELETE ON issue_read_observations
+        BEGIN
+          SELECT RAISE(ABORT, 'issue read observations are append-only');
+        END;
+      `);
+    },
+  },
 ];
