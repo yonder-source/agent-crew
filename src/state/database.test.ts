@@ -13,7 +13,7 @@ test("initializes an empty database and safely reopens it", () => {
 
 	try {
 		const first = openDatabase(path);
-		assert.equal(getSchemaVersion(first), 13);
+		assert.equal(getSchemaVersion(first), 17);
 		assert.equal(first.pragma("journal_mode", { simple: true }), "wal");
 		assert.equal(first.pragma("synchronous", { simple: true }), 2);
 		assert.equal(first.pragma("busy_timeout", { simple: true }), 5_000);
@@ -35,7 +35,7 @@ test("initializes an empty database and safely reopens it", () => {
 		first.close();
 
 		const second = openDatabase(path);
-		assert.equal(getSchemaVersion(second), 13);
+		assert.equal(getSchemaVersion(second), 17);
 		assert.ok(
 			second
 				.prepare(
@@ -140,7 +140,18 @@ test("schema includes unattributable snapshots and preserves issue read heads", 
 			.run();
 
 		runMigrations(database, controllerMigrations);
-		assert.equal(getSchemaVersion(database), 13);
+		assert.equal(getSchemaVersion(database), 17);
+		for (const table of [
+			"candidate_submissions",
+			"publication_evidence_snapshots",
+			"repair_cycles",
+			"repair_reservations",
+			"delivery_verifications",
+			"publication_bindings",
+		]) {
+			assert.ok(database.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?")
+				.get(table), `missing table ${table}`);
+		}
 		assert.equal(
 			(
 				database
@@ -250,7 +261,7 @@ test("upgrades the merged WBS4 schema without losing jobs or execution records",
     previous.close();
     const upgraded = openDatabase(path);
     try {
-      assert.equal(getSchemaVersion(upgraded), 12);
+      assert.equal(getSchemaVersion(upgraded), 17);
       assert.deepEqual(upgraded.prepare('SELECT lifecycle, ownership_generation FROM executions WHERE execution_id = ?').get('old-execution'),
         { lifecycle: 'reserved', ownership_generation: 1 });
       for (const table of ['execution_runs', 'execution_observations', 'execution_commands', 'execution_command_observations', 'source_artifacts']) {

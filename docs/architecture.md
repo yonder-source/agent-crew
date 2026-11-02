@@ -68,7 +68,7 @@ test setup lives in `tests/fixtures/`.
 | Issue admission | Periodically discover issues, observe readiness, verify approval/native dependencies and reserve work | Immutable scope and approval evidence, authorized prerequisite confirmations, idempotent decisions, one job and one live execution |
 | Job lifecycle | Inspect, answer questions, pause, resume, cancel and retry | Ownership generations, permissions, capacity and budgets |
 | Runtime supervision | Start, inspect, stop, preserve, restore and clean up | Swarm identity and placement, readiness, active-time enforcement and artifacts |
-| Publication | Validate candidates, publish and inspect results | Source export, base revision, branch and PR bindings, checks and candidate approvals |
+| Publication | Validate candidates, publish and inspect results | Immutable candidates, base and task-branch bindings, durable push/PR effects, unexpected-branch preservation receipts, exact checks/reviews, bounded repair and merge verification |
 | Effect delivery | Record intent, execute, reconcile and report | Durable queue, operation identity, bounded retries and receipts |
 
 Native tool and HTTP adapters pass caller identity, structured requests and
@@ -100,6 +100,10 @@ workflow slices.
 | Effect | Operation identity, argument fingerprint, authorized intent, ownership, outcome and remote receipt |
 | Checkpoint | Source artifact identity, integrity checks and restoration metadata |
 | Validation evidence | Candidate commit, validation commands and results |
+| Publication binding | One immutable task branch and pull request per job |
+| Publication evidence | Immutable provider snapshots tied to the confirmed PR effect receipt |
+| Repair cycle | Job-wide allowance, human extensions and one reservation per repair execution |
+| Delivery verification | Immutable complete/blocked outcome tied to the latest merged-PR snapshot |
 
 The effect-delivery module persists intent and an argument fingerprint before
 calling an adapter. Operation identities deduplicate requests; execution and

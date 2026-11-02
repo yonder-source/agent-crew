@@ -745,4 +745,172 @@ export const controllerMigrations: Migration[] = [
       `);
     },
   },
+
+	{
+		version: 14,
+		name: 'publication-evidence-snapshots',
+		up: (database: Database.Database) => {
+			database.exec(`
+        CREATE TABLE publication_evidence_snapshots (
+          snapshot_id TEXT PRIMARY KEY CHECK (length(snapshot_id) > 0),
+          job_id TEXT NOT NULL REFERENCES jobs(job_id),
+          candidate_id TEXT NOT NULL REFERENCES candidate_submissions(candidate_id),
+          pull_request_operation_id TEXT NOT NULL REFERENCES effect_operations(operation_id),
+          repository_id TEXT NOT NULL CHECK (length(repository_id) > 0),
+          issue_id TEXT NOT NULL CHECK (length(issue_id) > 0),
+          base_branch TEXT NOT NULL CHECK (length(base_branch) > 0),
+          pull_request_number INTEGER NOT NULL CHECK (pull_request_number > 0),
+          head_sha TEXT NOT NULL CHECK (length(head_sha) IN (40, 64)),
+          base_sha TEXT NOT NULL CHECK (length(base_sha) IN (40, 64)),
+          policy_version TEXT NOT NULL CHECK (length(policy_version) > 0),
+          observed_at TEXT NOT NULL,
+          source_identity TEXT NOT NULL CHECK (length(source_identity) > 0),
+          source_cursor TEXT,
+          complete INTEGER NOT NULL CHECK (complete IN (0, 1)),
+          pr_state TEXT NOT NULL CHECK (pr_state IN ('open', 'closed', 'merged')),
+          merge_commit_sha TEXT CHECK (merge_commit_sha IS NULL OR length(merge_commit_sha) IN (40, 64)),
+          merge_parent_shas_json TEXT NOT NULL,
+          checks_json TEXT NOT NULL,
+          reviews_json TEXT NOT NULL,
+          writer_generation INTEGER NOT NULL CHECK (writer_generation > 0),
+          created_at TEXT NOT NULL
+        ) STRICT;
+
+        CREATE INDEX publication_evidence_candidate_idx
+        ON publication_evidence_snapshots (candidate_id, observed_at, snapshot_id);
+
+        CREATE TRIGGER publication_evidence_snapshots_prevent_update
+        BEFORE UPDATE ON publication_evidence_snapshots
+        BEGIN
+          SELECT RAISE(ABORT, 'publication evidence snapshots are immutable');
+        END;
+        CREATE TRIGGER publication_evidence_snapshots_prevent_delete
+        BEFORE DELETE ON publication_evidence_snapshots
+        BEGIN
+          SELECT RAISE(ABORT, 'publication evidence snapshots are immutable');
+        END;
+      `);
+		},
+	},
+	{
+		version: 15,
+		name: 'bounded-repair-reservations',
+		up: (database: Database.Database) => {
+			database.exec(`
+        CREATE TABLE repair_cycles (
+          job_id TEXT PRIMARY KEY REFERENCES jobs(job_id),
+          allowance INTEGER NOT NULL CHECK (allowance >= 1),
+          used_count INTEGER NOT NULL DEFAULT 0 CHECK (used_count >= 0 AND used_count <= allowance),
+          row_version INTEGER NOT NULL DEFAULT 1 CHECK (row_version > 0),
+          updated_at TEXT NOT NULL
+        ) STRICT;
+
+        CREATE TABLE repair_reservations (
+          reservation_id TEXT PRIMARY KEY CHECK (length(reservation_id) > 0),
+          job_id TEXT NOT NULL REFERENCES jobs(job_id),
+          cycle_number INTEGER NOT NULL CHECK (cycle_number > 0),
+          candidate_id TEXT NOT NULL REFERENCES candidate_submissions(candidate_id),
+          evidence_snapshot_id TEXT NOT NULL REFERENCES publication_evidence_snapshots(snapshot_id),
+          execution_id TEXT NOT NULL UNIQUE REFERENCES executions(execution_id),
+          trigger_evidence_json TEXT NOT NULL,
+          actionable_feedback_json TEXT NOT NULL,
+          writer_generation INTEGER NOT NULL CHECK (writer_generation > 0),
+          reserved_at TEXT NOT NULL,
+          UNIQUE (job_id, cycle_number)
+        ) STRICT;
+
+        CREATE INDEX repair_reservations_job_idx
+        ON repair_reservations (job_id, cycle_number);
+
+        CREATE TABLE repair_allowance_extensions (
+          extension_id TEXT PRIMARY KEY CHECK (length(extension_id) > 0),
+          job_id TEXT NOT NULL REFERENCES jobs(job_id),
+          added_attempts INTEGER NOT NULL CHECK (added_attempts > 0),
+          approver_identity TEXT NOT NULL CHECK (length(approver_identity) > 0),
+          authority_id TEXT NOT NULL CHECK (length(authority_id) > 0),
+          decision_receipt TEXT NOT NULL CHECK (length(decision_receipt) > 0),
+          writer_generation INTEGER NOT NULL CHECK (writer_generation > 0),
+          granted_at TEXT NOT NULL
+        ) STRICT;
+
+        CREATE TRIGGER repair_allowance_extensions_prevent_update
+        BEFORE UPDATE ON repair_allowance_extensions
+        BEGIN
+          SELECT RAISE(ABORT, 'repair allowance extensions are immutable');
+        END;
+        CREATE TRIGGER repair_allowance_extensions_prevent_delete
+        BEFORE DELETE ON repair_allowance_extensions
+        BEGIN
+          SELECT RAISE(ABORT, 'repair allowance extensions are immutable');
+        END;
+      `);
+		},
+	},
+	{
+		version: 16,
+		name: 'delivery-verifications',
+		up: (database: Database.Database) => {
+		database.exec(`
+        CREATE TABLE delivery_verifications (
+          verification_id TEXT PRIMARY KEY CHECK (length(verification_id) > 0),
+          job_id TEXT NOT NULL REFERENCES jobs(job_id),
+          candidate_id TEXT NOT NULL REFERENCES candidate_submissions(candidate_id),
+          snapshot_id TEXT NOT NULL REFERENCES publication_evidence_snapshots(snapshot_id),
+          pull_request_number INTEGER NOT NULL CHECK (pull_request_number > 0),
+          candidate_sha TEXT NOT NULL CHECK (length(candidate_sha) IN (40, 64)),
+          base_sha TEXT NOT NULL CHECK (length(base_sha) IN (40, 64)),
+          merge_commit_sha TEXT CHECK (merge_commit_sha IS NULL OR length(merge_commit_sha) IN (40, 64)),
+          status TEXT NOT NULL CHECK (status IN ('complete', 'blocked')),
+          reasons_json TEXT NOT NULL,
+          checks_executed_json TEXT NOT NULL,
+          verified_at TEXT NOT NULL,
+          writer_generation INTEGER NOT NULL CHECK (writer_generation > 0)
+        ) STRICT;
+
+        CREATE INDEX delivery_verifications_job_idx
+        ON delivery_verifications (job_id, verified_at, verification_id);
+
+        CREATE TRIGGER delivery_verifications_prevent_update
+        BEFORE UPDATE ON delivery_verifications
+        BEGIN
+          SELECT RAISE(ABORT, 'delivery verifications are immutable');
+        END;
+        CREATE TRIGGER delivery_verifications_prevent_delete
+        BEFORE DELETE ON delivery_verifications
+        BEGIN
+          SELECT RAISE(ABORT, 'delivery verifications are immutable');
+        END;
+      `);
+		},
+	},
+	{
+		version: 17,
+		name: 'job-publication-bindings',
+		up: (database: Database.Database) => {
+		database.exec(`
+        CREATE TABLE publication_bindings (
+          job_id TEXT PRIMARY KEY REFERENCES jobs(job_id),
+          repository_id TEXT NOT NULL CHECK (length(repository_id) > 0),
+          task_branch TEXT NOT NULL CHECK (length(task_branch) > 0),
+          base_branch TEXT NOT NULL CHECK (length(base_branch) > 0),
+          pull_request_number INTEGER NOT NULL CHECK (pull_request_number > 0),
+          initial_candidate_id TEXT NOT NULL REFERENCES candidate_submissions(candidate_id),
+          bound_at TEXT NOT NULL,
+          UNIQUE (repository_id, task_branch),
+          UNIQUE (repository_id, pull_request_number)
+        ) STRICT;
+
+        CREATE TRIGGER publication_bindings_prevent_update
+        BEFORE UPDATE ON publication_bindings
+        BEGIN
+          SELECT RAISE(ABORT, 'publication bindings are immutable');
+        END;
+        CREATE TRIGGER publication_bindings_prevent_delete
+        BEFORE DELETE ON publication_bindings
+        BEGIN
+          SELECT RAISE(ABORT, 'publication bindings are immutable');
+        END;
+      `);
+		},
+	},
 ];
