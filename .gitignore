@@ -1,0 +1,27 @@
+# Local runtime data and credentials
+.env
+.env.*
+!.env.example
+secrets/
+state/
+local-state/
+backups/
+artifacts/
+*.sqlite
+*.sqlite-*
+*.db
+*.db-*
+*.pem
+*.key
+*.log
+
+# Generated Node.js output
+node_modules/
+dist/
+build/
+coverage/
+*.tsbuildinfo
+
+# Local editor/OS state
+.DS_Store
+Thumbs.db
