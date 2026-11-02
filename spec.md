@@ -315,6 +315,13 @@ against GitHub. Give each job a stable `job_id` and each execution an
 `execution_id`. Link executions, Gateway sessions and Swarm observations to
 the job.
 
+Keep job phase, requested control (`run`, `pause` or `cancel`) and execution
+lifecycle as separate state. Job phase describes workflow progress; requested
+control remains durable while an asynchronous pause or cancellation is in
+progress. Track execution reservation, start, active, stop and terminal outcome
+with its ownership generation. Store blockers and pending human decisions as
+durable records rather than encoding their details in phase names.
+
 Save human input and effect intent before acknowledging acceptance. Include
 the operation identity, authenticated caller identity, authorization evidence,
 job, execution, scope version and policy version. Record completion
@@ -322,6 +329,30 @@ separately, using a receipt or verification from the external service. Keep
 append-only history and record late results. Give each new authorized action a
 new identity. Track effects as pending, confirmed successful, confirmed failed
 or unknown. Reusing source requires current authorization.
+
+Atomically assign each accepted job state change a monotonically increasing
+per-job sequence and increment its row version. Provider timestamps and
+observation times are evidence, not ordering authority. Append stale or late
+observations to history without letting them overwrite newer state. Build Slack
+and UI status from durable records and current external observations; any cached
+view must be rebuildable.
+
+Configure the workflow database with SQLite WAL, `synchronous=FULL`, and foreign
+keys enabled. Use short `BEGIN IMMEDIATE` transactions for claims, capacity,
+ownership and effect-intent updates; perform network and runtime work after
+commit. Verify the effective database settings at startup.
+
+The Controller writer holds an exclusive host-local OS process lock for its
+entire lifetime. It emits a heartbeat every five seconds; three missed
+heartbeats mark it unhealthy and block new admissions and effects, but do not
+expire ownership or authorize takeover. A replacement must acquire the same
+lock before starting work, and increments the durable writer generation before
+serving requests. Confirm the old process has exited and released the lock;
+never infer death from heartbeat loss or PID absence alone. If the process is
+alive but unresponsive, an authorized operator stops it, verifies lock release,
+then reconciles in-flight effects before reopening work. Every state mutation
+and effect completion is fenced by the writer generation, so late results from
+the previous generation remain history only.
 
 Slack and the UI share one job view. Show the phase, current execution,
 blocker and next permitted action. Include issue and PR links, usage,
@@ -484,7 +515,7 @@ Resolve each contract before implementing dependent components.
 | --- | --- | --- |
 | T01 | Admission and initial scope evidence | Settled in R4: human-authorized readiness through GitHub or Slack/Controller, revision-bound approval evidence, native `blocked_by` dependencies, and the missing-scope clarification path. Verify these paths and the readiness-removal/start boundary during implementation. |
 | T02 | Issue writes | Settled in R5 with a known residual risk: preflight/write/readback can overwrite an undetected concurrent edit because atomic conditional updates are unverified. Preserve evidence and route detected conflicts for human resolution; future hardening is provider-supported conditional update or compare-and-swap. |
-| T03 | Persistence and lifecycle | Controller process layout, job and execution transitions, atomic version and ownership updates, observation ordering and rules for rebuilding status views |
+| T03 | Persistence and lifecycle | Settled in R8 and ADRs 0002–0003: one installation-wide writer holds a host-local OS lock; 5-second heartbeat with 15-second unhealthy threshold never authorizes takeover. A replacement waits for confirmed process exit and lock release, increments the writer generation, and reconciles in-flight effects. Verify process replacement, restart recovery and stale-generation fencing during implementation. |
 | T04 | External-effect adapters | Schemas for each operation, key scope and retention, argument fingerprints, transactions for intent and audit records, retry budgets and reconciliation evidence |
 | T05 | Runtime and privilege grants | Pinned OpenClaw and Swarm versions, management UI page integration, runtime placement, tool and network enforcement, service access to secrets and host operations, internal authentication and rotation |
 | T06 | Source and backup recovery | Archive format, capture schedule, encryption, access controls, a consistent database and artifact manifest, and a restore procedure |
