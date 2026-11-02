@@ -72,7 +72,8 @@ test('flock prevents a second writer and allows restart with a higher generation
     phase: 'queued',
     writerGeneration: 1,
   });
-  new EffectStore(state).begin({
+  const effects = new EffectStore(state);
+  effects.begin({
     operationId: 'operation-recovery',
     jobId: job.jobId,
     operationKind: 'github_issue_update',
@@ -86,6 +87,7 @@ test('flock prevents a second writer and allows restart with a higher generation
     steps: [{ stepId: 'step-recovery', stepKey: 'write', target: { title: 'Accepted title' } }],
     writerGeneration: 1,
   });
+  effects.claimStepStart('operation-recovery', 'step-recovery', 1);
   database.prepare(`
     UPDATE controller_writer SET status = 'stopped', updated_at = ? WHERE singleton_id = 1
   `).run(seededAt);

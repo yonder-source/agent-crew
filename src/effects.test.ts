@@ -67,10 +67,11 @@ test('blocks a new matching operation until it explicitly replaces an unknown on
     const job = createJob(fixture.jobs);
     const effects = new EffectStore(new StateContext(fixture.database));
     effects.begin(beginInput(job.jobId));
+    assert.equal(effects.claimStepStart('operation-1', 'step-write', 1), true);
     fixture.effectResults.recordResult({
       operationId: 'operation-1',
       stepId: 'step-write',
-      expectedStepVersion: 1,
+      expectedStepVersion: 2,
       status: 'unknown',
       result: { delivery: 'response_lost' },
       resultGeneration: 1,
@@ -80,7 +81,7 @@ test('blocks a new matching operation until it explicitly replaces an unknown on
 
     const replacement = beginInput(job.jobId);
     replacement.operationId = 'operation-2';
-    replacement.expectedJobVersion = 3;
+    replacement.expectedJobVersion = 4;
     replacement.steps = replacement.steps.map((step) => ({
       ...step,
       stepId: `${step.stepId}-replacement`,

@@ -10,7 +10,6 @@ import {
   type BeginEffectInput,
   type EffectAuditEvent,
   type EffectOperationView,
-  type EffectOutcome,
   type EffectStep,
   type EffectStepInput,
   type RawAuthorization,
@@ -235,25 +234,54 @@ export class EffectStore {
     return rows.map(mapAudit);
   }
 
-  canStartStep(operationId: string, stepId: string, writerGeneration: number): boolean {
+  claimStepStart(operationId: string, stepId: string, writerGeneration: number): boolean {
     const occurredAt = this.state.now().toISOString();
-    this.state.assertWriter(writerGeneration, occurredAt);
-    const step = this.state.database.prepare(
-      'SELECT status FROM effect_steps WHERE operation_id = ? AND step_id = ?',
-    ).get(operationId, stepId) as { status: EffectOutcome } | undefined;
-    if (step?.status !== 'pending') return false;
-    const operation = this.state.database.prepare(
-      'SELECT writer_generation FROM effect_operations WHERE operation_id = ?',
-    ).get(operationId) as { writer_generation: number } | undefined;
-    if (!operation || operation.writer_generation !== writerGeneration) return false;
-    const blockedDependency = this.state.database.prepare(`
-      SELECT 1 AS blocked
-      FROM effect_step_dependencies dependency
-      JOIN effect_steps parent ON parent.step_id = dependency.depends_on_step_id
-      WHERE dependency.step_id = ? AND parent.status <> 'confirmed_success'
-      LIMIT 1
-    `).get(stepId);
-    return !blockedDependency;
+    return this.state.database.transaction(() => {
+      this.state.assertWriter(writerGeneration, occurredAt);
+      const step = this.state.database.prepare(`
+        SELECT step.*, operation.job_id, operation.writer_generation
+        FROM effect_steps step JOIN effect_operations operation USING (operation_id)
+        WHERE step.operation_id = ? AND step.step_id = ?
+      `).get(operationId, stepId) as (RawStep & { job_id: string; writer_generation: number }) | undefined;
+      if (
+        step?.status !== 'pending'
+        || step.started_at !== null
+        || step.writer_generation !== writerGeneration
+      ) return false;
+      const blockedDependency = this.state.database.prepare(`
+        SELECT 1 AS blocked
+        FROM effect_step_dependencies dependency
+        JOIN effect_steps parent ON parent.step_id = dependency.depends_on_step_id
+        WHERE dependency.step_id = ? AND parent.status <> 'confirmed_success'
+        LIMIT 1
+      `).get(stepId);
+      if (blockedDependency) return false;
+      const claim = this.state.database.prepare(`
+        UPDATE effect_steps SET started_generation = ?, started_at = ?,
+          attempt_count = attempt_count + 1, row_version = row_version + 1, updated_at = ?
+        WHERE step_id = ? AND status = 'pending' AND started_at IS NULL AND row_version = ?
+      `).run(writerGeneration, occurredAt, occurredAt, stepId, step.row_version);
+      if (claim.changes !== 1) return false;
+      this.appendAudit(operationId, 'effect_step_start_claimed', {
+        stepId,
+        stepVersion: step.row_version + 1,
+        attemptCount: step.attempt_count + 1,
+      }, writerGeneration, occurredAt);
+      const job = this.state.getJobOrThrow(step.job_id);
+      const nextJobVersion = job.row_version + 1;
+      const nextSequence = job.event_sequence + 1;
+      this.state.bumpJob(job, nextJobVersion, nextSequence, occurredAt);
+      this.state.insertEvent({
+        jobId: job.job_id,
+        sequence: nextSequence,
+        rowVersion: nextJobVersion,
+        eventType: 'effect_step_start_claimed',
+        payload: { operationId, stepId },
+        writerGeneration,
+        occurredAt,
+      });
+      return true;
+    }).immediate();
   }
 
   private validateSteps(input: EffectStepInput[]): Array<EffectStepInput & { targetJson: string }> {
