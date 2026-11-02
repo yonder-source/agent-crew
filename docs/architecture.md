@@ -36,6 +36,12 @@ flowchart TB
 OpenClaw provides sessions, model calls, tool dispatch, Slack transport and
 the management UI.
 
+The Controller foundation runs on Node.js 22.23.1. Its HTTP `/healthz` endpoint
+reports that SQLite initialization and the supported schema version completed.
+The supported process entrypoint takes a nonblocking host-local `flock` for the
+installation writer lock before starting the Controller and retains it until
+the process exits.
+
 Slack and the UI build the job view from Controller records and current
 Gateway, runtime, GitHub and delivery observations.
 
@@ -69,6 +75,11 @@ State is partitioned by repository. Keep source checkpoints and large logs
 outside SQLite; task runtimes submit state changes through the Controller.
 Use short transactions for job claims, versioned state updates and effect
 intent. Perform network and runtime operations outside transactions.
+
+The current foundation uses `better-sqlite3`, WAL mode, `synchronous=FULL`,
+foreign-key enforcement and a five-second busy timeout. Ordered migrations are
+recorded in `schema_migrations`; business tables are added with their owning
+workflow slices.
 
 | Record | Purpose |
 | --- | --- |
