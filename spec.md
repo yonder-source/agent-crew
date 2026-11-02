@@ -312,9 +312,35 @@ checks and human review; verify final HEAD, checks and merge status on completio
 PR descriptions cannot authorize closing unrelated issues or marking tracking
 issues or partial work as delivered.
 
+Accept required checks on candidate commit `H` or on synthetic merge commit `M`
+only when its parents bind the exact `H` and current base `B`. Bind each check to
+the repository, PR, target SHA, configured check identity and expected producer;
+include workflow identity when required by policy. Accept `success` by default.
+Only `success` passes a required check by default. `neutral` and `skipped` are
+not success unless the configured policy explicitly allows each result, and
+must not be reported as executed validation. Missing, pending, stale or
+wrong-target results never satisfy a required check. Refresh checks and reviews
+if candidate, base or policy changes. A submitted approval counts only for the
+exact candidate and a currently authorized reviewer; dismissed or revoked
+approvals do not count.
+After a candidate, base or policy change, prior check results and review
+decisions do not satisfy the new candidate: wait for checks on the current
+candidate and a current authorized review before delivery or repair decisions.
+Missing or pending checks block completion and repair; they are not themselves
+repair triggers. A changed candidate may still be published to its PR so the
+provider can run checks, but it cannot be reported ready or merged until fresh
+required evidence is observed. Stale or revoked approvals likewise require a
+new approval for the current candidate.
+
+Known protected changes and uncertain classification require human approval for
+the exact candidate, base and policy. Ordinary test maintenance is allowed.
+
 Automated repair responds only to failed required CI checks or an authorized
-reviewer's explicit request for changes. Batch actionable feedback at repair
-start; preserve the repair count across restarts and scope revisions.
+reviewer's submitted `CHANGES_REQUESTED` review on the bound candidate. Comments
+and bot feedback alone are informational. Batch actionable feedback at repair
+start; reserve the repair allowance atomically and preserve the cycle across
+restarts. If a PR is merged without required policy evidence, record the merge
+but keep delivery blocked; do not repair the merged PR.
 
 **Edge cases**
 
@@ -574,5 +600,5 @@ Resolve each contract before implementing dependent components.
 | T05 | Runtime and privilege grants | Settled in R1/R6: qualify OpenClaw 2026.10.9, per-execution paired-node Codex remote execution, separate Swarm/deadline supervisor, and server-authenticated UI identity. Pin the qualified image/SDK and installation Swarm version; verify tool, network, identity and stop boundaries before unattended coding. |
 | T06 | Source and backup recovery | Settled in R10: verified standalone source archives; SQLite online backup with snapshot-derived artifact references and a final recovery manifest; every restore verifies database/schema and artifact integrity, reconciles current external facts, and keeps admissions/effects paused until the gate passes. Full OpenClaw conversation history, Swarm manager state and application-level artifact encryption are out of scope. Configure off-host target, storage controls, cadence and retention before operational acceptance; verify host-loss restore during implementation. |
 | T07 | Metering and limits | Settled in R6: use live cumulative output for output/burn-rate guards and reconcile fuller attempt-final usage without double-counting; mark unavailable input, cache or total usage partial/unknown. Limits apply only to observed metrics and are not a hard provider billing cap. Set thresholds and metering grace before operational acceptance; verify plugin delivery, resets, grace and abort overshoot. |
-| T08 | Validation and protected changes | Validation of the exact candidate, required CI checks, authorized reviewer identities, detection of protected changes and escalation of uncertain cases |
+| T08 | Validation and protected changes | Settled in R7: accept checks on exact candidate H or synthetic merge M bound to H and current base B. Only success passes by default; neutral/skipped pass only when policy explicitly allows them. Missing, pending, stale or wrong-target checks and stale/revoked reviews block delivery; candidate/base/policy changes require fresh evidence. Only current required-check failures or authorized CHANGES_REQUESTED reviews trigger repair. A merge missing required evidence is recorded but remains blocked for delivery. |
 | T09 | Operations and packaging | Repeatable installation, upgrades and maintenance; off-host storage configuration; access and retention policies; release packaging |
