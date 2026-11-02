@@ -321,4 +321,51 @@ export const controllerMigrations: Migration[] = [
       `);
     },
   },
+  {
+    version: 7,
+    name: 'issue-readiness-evidence',
+    up: (database: Database.Database) => {
+      database.exec(`
+        CREATE TABLE readiness_evidence (
+          evidence_id TEXT PRIMARY KEY CHECK (length(evidence_id) > 0),
+          repository_id TEXT NOT NULL CHECK (length(repository_id) > 0),
+          issue_id TEXT NOT NULL CHECK (length(issue_id) > 0),
+          scope_revision_id TEXT NOT NULL REFERENCES issue_scope_revisions(scope_revision_id),
+          source TEXT NOT NULL CHECK (source IN ('github_label_event', 'slack_approval')),
+          approver_identity TEXT NOT NULL CHECK (length(approver_identity) > 0),
+          authority_evidence_json TEXT NOT NULL,
+          github_label_event_id TEXT,
+          slack_conversation_id TEXT,
+          slack_approval_receipt_id TEXT,
+          label_write_operation_id TEXT,
+          label_present INTEGER NOT NULL CHECK (label_present IN (0, 1)),
+          observed_at TEXT NOT NULL,
+          writer_generation INTEGER NOT NULL CHECK (writer_generation > 0),
+          CHECK (
+            (source = 'github_label_event' AND github_label_event_id IS NOT NULL
+              AND slack_conversation_id IS NULL AND slack_approval_receipt_id IS NULL
+              AND label_write_operation_id IS NULL)
+            OR (source = 'slack_approval' AND github_label_event_id IS NULL
+              AND slack_conversation_id IS NOT NULL AND slack_approval_receipt_id IS NOT NULL
+              AND label_write_operation_id IS NOT NULL)
+          )
+        ) STRICT;
+
+        CREATE INDEX readiness_evidence_issue_idx
+        ON readiness_evidence (repository_id, issue_id, observed_at);
+
+        CREATE TRIGGER readiness_evidence_prevent_update
+        BEFORE UPDATE ON readiness_evidence
+        BEGIN
+          SELECT RAISE(ABORT, 'readiness evidence is immutable');
+        END;
+
+        CREATE TRIGGER readiness_evidence_prevent_delete
+        BEFORE DELETE ON readiness_evidence
+        BEGIN
+          SELECT RAISE(ABORT, 'readiness evidence is immutable');
+        END;
+      `);
+    },
+  },
 ];
