@@ -9,13 +9,18 @@ import {
 } from './state-common.js';
 import type { StateContext } from './state-common.js';
 
-type ExecutionTransition = {
+type ExecutionTransitionBase = {
   executionId: string;
   expectedVersion: number;
   writerGeneration: number;
-  lifecycle: ExecutionLifecycle;
   terminalOutcome?: string;
   eventPayload?: unknown;
+};
+
+type ExecutionTransition = ExecutionTransitionBase & {
+  lifecycle: ExecutionLifecycle;
+  expectedIssueHeadVersion?: number;
+  expectedReadinessHeadVersion?: number;
 };
 
 type UsageInput = {
@@ -100,6 +105,36 @@ export class ExecutionStore {
       }
       if (!this.canTransition(execution.lifecycle, input.lifecycle)) {
         throw new StateError('INVALID_EXECUTION_TRANSITION', 'Execution lifecycle transition is not allowed');
+      }
+      if (input.lifecycle === 'starting') {
+        if (input.expectedIssueHeadVersion === undefined || input.expectedReadinessHeadVersion === undefined) {
+          throw new StateError('START_EVIDENCE_REQUIRED', 'Execution start requires current issue and readiness versions');
+        }
+        const issueHead = this.state.database.prepare(`
+          SELECT h.head_version, o.status, o.scope_revision_id
+          FROM issue_read_heads h JOIN issue_read_observations o USING (observation_id)
+          WHERE h.repository_id = ? AND h.issue_id = ?
+        `).get(job.repository_id, job.issue_id) as { head_version: number; status: string; scope_revision_id: string | null } | undefined;
+        if (issueHead?.status !== 'complete') {
+          throw new StateError('START_SCOPE_UNAVAILABLE', 'Current issue scope is unavailable at execution start');
+        }
+        if (issueHead.head_version !== input.expectedIssueHeadVersion || issueHead.scope_revision_id !== job.scope_revision_id) {
+          throw new StateError('START_SCOPE_STALE', 'Current issue scope no longer matches the reserved job');
+        }
+        const readinessHead = this.state.database.prepare(`
+          SELECT h.head_version, o.status, o.label_present
+          FROM readiness_heads h JOIN readiness_observations o USING (observation_id)
+          WHERE h.repository_id = ? AND h.issue_id = ?
+        `).get(job.repository_id, job.issue_id) as { head_version: number; status: string; label_present: number | null } | undefined;
+        if (readinessHead?.status !== 'complete') {
+          throw new StateError('READINESS_UNAVAILABLE', 'Current readiness is unavailable at execution start');
+        }
+        if (readinessHead.head_version !== input.expectedReadinessHeadVersion || readinessHead.label_present !== 1) {
+          throw new StateError('READINESS_REMOVED', 'Issue readiness no longer permits execution start');
+        }
+        if (job.requested_control !== 'run') {
+          throw new StateError('JOB_CONTROL_BLOCKS_EXECUTION', 'Job control does not permit execution start');
+        }
       }
       const terminalOutcome = input.lifecycle === 'terminal' ? input.terminalOutcome : undefined;
       if (input.lifecycle === 'terminal') assertText(terminalOutcome ?? '', 'terminalOutcome');

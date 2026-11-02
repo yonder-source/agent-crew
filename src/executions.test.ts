@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { StateError } from './state-common.js';
-import { createJob, createStateFixture } from './state-fixture.js';
+import { createJob, createStateFixture, prepareExecutionStartEvidence } from './state-fixture.js';
 
 test('reserves one live execution and enforces its lifecycle and generation', () => {
   const fixture = createStateFixture();
@@ -23,11 +23,14 @@ test('reserves one live execution and enforces its lifecycle and generation', ()
       writerGeneration: 1,
     }), (error: unknown) => error instanceof StateError && error.code === 'LIVE_EXECUTION_EXISTS');
 
+    const startEvidence = prepareExecutionStartEvidence(fixture, job.repositoryId, job.issueId, job.scopeRevisionId);
     const starting = fixture.executions.transition({
       executionId: execution.executionId,
       expectedVersion: execution.rowVersion,
       writerGeneration: 1,
       lifecycle: 'starting',
+      expectedIssueHeadVersion: startEvidence.issueHeadVersion,
+      expectedReadinessHeadVersion: startEvidence.readinessHeadVersion,
       eventPayload: { lifecycle: 'terminal', executionId: 'forged' },
     });
     const startingEvent = fixture.jobs.listEvents(job.jobId).at(-1);

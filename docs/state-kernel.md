@@ -28,7 +28,29 @@ age and PID absence alone never authorize replacement.
 - `JobStore` creates one stable job per repository and issue, applies
   row-version-fenced phase/control/scope updates, and records blockers.
 - `ExecutionStore` reserves at most one live execution per job, enforces the
-  lifecycle and ownership generation, and stores versioned cumulative usage.
+  lifecycle and ownership generation, rechecks current issue/readiness heads
+  before moving a reserved execution to `starting`, and stores versioned
+  cumulative usage.
+- `IssueScopeStore` records immutable title/body/native-dependency snapshots
+  with template and policy versions. Read observations are append-only and use
+  an expected-head version so delayed provider polls cannot replace a newer
+  accepted observation. Writer health uses the Controller clock, while provider
+  observation times remain evidence. Complete but unattributable provider
+  snapshots retain their exact content without creating a trusted scope
+  revision; an authorized human confirmation records authority evidence before
+  linking that content to a new scope revision.
+- `ReadinessEvidenceStore` records GitHub label-event and Slack approval/label
+  write receipts separately, bound to the exact issue scope and authority
+  evidence.
+- `AdmissionStore` records current readiness observations and immutable
+  admission outcomes. It checks issue/readiness head versions, revision-bound
+  approvals, authority, native dependency completion evidence, cycles and
+  repository capacity, matches the current readiness actor to approval evidence
+  and orders evidence by durable append order rather than provider timestamps,
+  then creates the job and reserved execution in one immediate transaction. A
+  repeated decision identity replays only when its arguments match. Rejected
+  stale or unhealthy intake mutations are retained in append-only
+  `intake_rejection_events`, including requests made before a job exists.
 - `EffectStore.begin` persists an operation identity, argument fingerprint,
   target, expected job/execution/scope/policy versions, authorization evidence,
   step identities and the intent audit event in one transaction. The caller
