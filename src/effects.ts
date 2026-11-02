@@ -180,6 +180,11 @@ export class EffectStore {
         argumentFingerprint,
         stepCount: steps.length,
       }, input.writerGeneration, occurredAt, true);
+      if (input.replacementForOperationId) {
+        this.audit.append(input.replacementForOperationId, 'operation_replaced', {
+          replacementOperationId: input.operationId,
+        }, input.writerGeneration, occurredAt);
+      }
       const nextVersion = job.row_version + 1;
       const nextSequence = job.event_sequence + 1;
       this.state.bumpJob(job, nextVersion, nextSequence, occurredAt);
@@ -210,6 +215,7 @@ export class EffectStore {
     ).get(operationId) as RawAuthorization;
     return {
       operation: mapOperation(raw),
+      replacementOperationId: this.findReplacement(operationId),
       steps: this.listSteps(operationId),
       authorization: mapAuthorization(authorization),
     };
@@ -249,12 +255,12 @@ export class EffectStore {
       const step = this.state.database.prepare(`
         SELECT step.*, operation.job_id, operation.writer_generation, operation.scope_revision_id,
           operation.execution_id, operation.expected_execution_version, operation.operation_kind,
-          operation.target_json AS operation_target_json, operation.replacement_for_operation_id
+          operation.target_json AS operation_target_json
         FROM effect_steps step JOIN effect_operations operation USING (operation_id)
         WHERE step.operation_id = ? AND step.step_id = ?
       `).get(operationId, stepId) as (
         RawStep & Pick<RawOperation, 'job_id' | 'writer_generation' | 'scope_revision_id'
-          | 'execution_id' | 'expected_execution_version' | 'operation_kind' | 'replacement_for_operation_id'>
+          | 'execution_id' | 'expected_execution_version' | 'operation_kind'>
           & { operation_target_json: string }
       ) | undefined;
       if (
@@ -262,6 +268,14 @@ export class EffectStore {
         || step.started_at !== null
         || step.writer_generation !== writerGeneration
       ) return false;
+      const replacementOperationId = this.findReplacement(operationId);
+      if (replacementOperationId !== null) {
+        this.audit.append(operationId, 'effect_step_start_rejected_replaced_operation', {
+          stepId,
+          replacementOperationId,
+        }, writerGeneration, occurredAt);
+        return false;
+      }
       const job = this.state.getJobOrThrow(step.job_id);
       if (job.requested_control !== 'run') {
         this.audit.append(operationId, 'effect_step_start_rejected_job_control', {
@@ -296,8 +310,7 @@ export class EffectStore {
           return false;
         }
       }
-      const unknownConflicts = this.listUnknownOperations(step.operation_kind, step.operation_target_json, operationId)
-        .filter((operation) => operation.operation_id !== step.replacement_for_operation_id);
+      const unknownConflicts = this.listUnknownOperations(step.operation_kind, step.operation_target_json, operationId);
       if (unknownConflicts.length > 0) {
         this.audit.append(operationId, 'effect_step_start_rejected_unknown_conflict', {
           stepId,
@@ -345,10 +358,22 @@ export class EffectStore {
     job_id: string;
   }> {
     return this.state.database.prepare(`
-      SELECT operation_id, job_id FROM effect_operations
-      WHERE operation_kind = ? AND target_json = ? AND status = 'unknown' AND operation_id <> ?
-      ORDER BY created_at, operation_id
+      SELECT operation.operation_id, operation.job_id FROM effect_operations operation
+      WHERE operation.operation_kind = ? AND operation.target_json = ?
+        AND operation.status = 'unknown' AND operation.operation_id <> ?
+        AND NOT EXISTS (
+          SELECT 1 FROM effect_operations replacement
+          WHERE replacement.replacement_for_operation_id = operation.operation_id
+        )
+      ORDER BY operation.created_at, operation.operation_id
     `).all(operationKind, targetJson, excludedOperationId) as Array<{ operation_id: string; job_id: string }>;
+  }
+
+  private findReplacement(operationId: string): string | null {
+    const row = this.state.database.prepare(
+      'SELECT operation_id FROM effect_operations WHERE replacement_for_operation_id = ?',
+    ).get(operationId) as { operation_id: string } | undefined;
+    return row?.operation_id ?? null;
   }
 
   private validateSteps(input: EffectStepInput[]): Array<EffectStepInput & { targetJson: string }> {

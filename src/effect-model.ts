@@ -151,6 +151,7 @@ export type RawAuditEvent = {
 
 export type EffectOperationView = {
   operation: EffectOperation;
+  replacementOperationId: string | null;
   steps: EffectStep[];
   authorization: EffectAuthorizationEvidence;
 };
