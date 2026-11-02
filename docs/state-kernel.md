@@ -29,8 +29,18 @@ age and PID absence alone never authorize replacement.
   row-version-fenced phase/control/scope updates, and records blockers.
 - `ExecutionStore` reserves at most one live execution per job, enforces the
   lifecycle and ownership generation, rechecks current issue/readiness heads
-  before moving a reserved execution to `starting`, and stores versioned
+  before moving a reserved execution to `starting`, rechecks job control before
+  activating a runtime after asynchronous launch, and stores versioned
   cumulative usage.
+- `ExecutionLaunchCoordinator` persists a fingerprinted launch effect before
+  calling the replaceable supervisor interface, activates only after exact
+  running-task inspection, and keeps uncertain or contradictory observations
+  from authorizing a second launch. Accepted task identities survive replay;
+  conflicting observations remain in audit history and unresolved starts have
+  durable job blockers. Activation atomically rechecks the launch scope/policy,
+  current issue/readiness, job control, and writer generation. Confirmed launch
+  failures replay their saved outcome. The proposed supervisor contract is
+  documented in [runtime-supervisor-contract.md](runtime-supervisor-contract.md).
 - `IssueScopeStore` records immutable title/body/native-dependency snapshots
   with template and policy versions. Read observations are append-only and use
   an expected-head version so delayed provider polls cannot replace a newer
