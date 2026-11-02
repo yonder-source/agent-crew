@@ -18,6 +18,7 @@ export type StateFixture = {
   executions: ExecutionStore;
   effects: EffectStore;
   effectResults: EffectResultStore;
+  state: StateContext;
   close: () => void;
 };
 
@@ -42,6 +43,7 @@ export function createStateFixture(): StateFixture {
     executions: new ExecutionStore(state),
     effects,
     effectResults: new EffectResultStore(state, effects),
+    state,
     close: () => {
       database.close();
       rmSync(directory, { recursive: true, force: true });
