@@ -248,10 +248,17 @@ export class CandidateStore {
 		return (
 			this.state.database
 				.prepare(
-					"SELECT * FROM candidate_submissions WHERE job_id = ? ORDER BY submitted_at, candidate_id",
+					"SELECT * FROM candidate_submissions WHERE job_id = ? ORDER BY rowid",
 				)
 				.all(jobId) as RawCandidateSubmission[]
 		).map(mapSubmission);
+	}
+
+	latestForJob(jobId: string): CandidateSubmissionRecord | undefined {
+		const row = this.state.database
+			.prepare("SELECT * FROM candidate_submissions WHERE job_id = ? ORDER BY rowid DESC LIMIT 1")
+			.get(jobId) as RawCandidateSubmission | undefined;
+		return row ? mapSubmission(row) : undefined;
 	}
 
 	private getConfirmedLaunchRequest(
