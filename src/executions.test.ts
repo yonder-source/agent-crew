@@ -109,3 +109,46 @@ test('stores cumulative usage by job and execution with unknown coverage preserv
     fixture.close();
   }
 });
+
+for (const requestedControl of ['pause', 'cancel'] as const) {
+  test(`does not activate a starting execution after ${requestedControl} is requested`, () => {
+    const fixture = createStateFixture();
+    try {
+      const job = createJob(fixture.jobs);
+      const execution = fixture.executions.reserve({
+        executionId: 'execution-1',
+        jobId: job.jobId,
+        expectedJobVersion: job.rowVersion,
+        writerGeneration: 1,
+      });
+      const startEvidence = prepareExecutionStartEvidence(fixture, job.repositoryId, job.issueId, job.scopeRevisionId);
+      const starting = fixture.executions.transition({
+        executionId: execution.executionId,
+        expectedVersion: execution.rowVersion,
+        writerGeneration: 1,
+        lifecycle: 'starting',
+        expectedIssueHeadVersion: startEvidence.issueHeadVersion,
+        expectedReadinessHeadVersion: startEvidence.readinessHeadVersion,
+      });
+      const currentJob = fixture.jobs.get(job.jobId);
+      assert.ok(currentJob);
+      fixture.jobs.transition({
+        jobId: job.jobId,
+        expectedVersion: currentJob.rowVersion,
+        writerGeneration: 1,
+        requestedControl,
+        eventType: 'control_changed',
+      });
+
+      assert.throws(() => fixture.executions.transition({
+        executionId: execution.executionId,
+        expectedVersion: starting.rowVersion,
+        writerGeneration: 1,
+        lifecycle: 'active',
+      }), (error: unknown) => error instanceof StateError && error.code === 'JOB_CONTROL_BLOCKS_EXECUTION');
+      assert.equal(fixture.executions.get(execution.executionId)?.lifecycle, 'starting');
+    } finally {
+      fixture.close();
+    }
+  });
+}

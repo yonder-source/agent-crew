@@ -136,6 +136,9 @@ export class ExecutionStore {
           throw new StateError('JOB_CONTROL_BLOCKS_EXECUTION', 'Job control does not permit execution start');
         }
       }
+      if (input.lifecycle === 'active' && job.requested_control !== 'run') {
+        throw new StateError('JOB_CONTROL_BLOCKS_EXECUTION', 'Job control does not permit execution activation');
+      }
       const terminalOutcome = input.lifecycle === 'terminal' ? input.terminalOutcome : undefined;
       if (input.lifecycle === 'terminal') assertText(terminalOutcome ?? '', 'terminalOutcome');
 

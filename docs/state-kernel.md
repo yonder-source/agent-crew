@@ -29,7 +29,8 @@ age and PID absence alone never authorize replacement.
   row-version-fenced phase/control/scope updates, and records blockers.
 - `ExecutionStore` reserves at most one live execution per job, enforces the
   lifecycle and ownership generation, rechecks current issue/readiness heads
-  before moving a reserved execution to `starting`, and stores versioned
+  before moving a reserved execution to `starting`, rechecks job control before
+  activating a runtime after asynchronous launch, and stores versioned
   cumulative usage.
 - `IssueScopeStore` records immutable title/body/native-dependency snapshots
   with template and policy versions. Read observations are append-only and use
