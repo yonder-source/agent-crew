@@ -53,6 +53,14 @@ remains the sole workflow-state writer.
 
 ## 2. Controller modules
 
+Source folders group the current implementation by responsibility: `src/app/`
+contains configuration and HTTP composition; `src/state/` owns SQLite, migrations
+and writer coordination; `src/jobs/`, `src/issues/`, `src/admission/`,
+`src/execution/` and `src/effects/` hold their corresponding workflow modules.
+`src/main.ts` remains the process entrypoint. Module tests live beside their
+source; application HTTP/process tests live in `tests/integration/`, and shared
+test setup lives in `tests/fixtures/`.
+
 | Module | Operations | Responsibilities |
 | --- | --- | --- |
 | Repository configuration | Save, validate, activate and inspect revisions | Routing, secret references and configuration verification |

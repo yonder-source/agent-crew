@@ -8,10 +8,10 @@
 	},
 	"scripts": {
 		"clean": "node scripts/clean.mjs",
-		"build": "npm run clean && tsc -p tsconfig.json",
+		"build": "npm run clean && tsc -p tsconfig.build.json",
 		"typecheck": "tsc --noEmit -p tsconfig.json",
-		"lint": "biome lint src scripts",
-		"test": "npm run build && node --test dist/config.test.js dist/controller.test.js dist/database.test.js dist/jobs.test.js dist/executions.test.js dist/execution-launch.test.js dist/writer.test.js dist/writer-entrypoint.test.js dist/effects.test.js dist/effect-results.test.js dist/effect-starts.test.js dist/effect-replacements.test.js dist/issue-template.test.js dist/issue-scopes.test.js dist/readiness.test.js dist/admission.test.js dist/discovery.test.js dist/issue-writes.test.js dist/github-blocked-by.test.js",
+		"lint": "biome lint src tests scripts",
+		"test": "npm run build && node --import tsx --test \"src/**/*.test.ts\" \"tests/**/*.test.ts\"",
 		"check": "npm run lint && npm run typecheck && npm test",
 		"start": "node scripts/start.mjs",
 		"dev": "node scripts/start.mjs --import tsx --watch src/main.ts"

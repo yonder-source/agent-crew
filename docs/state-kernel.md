@@ -124,7 +124,7 @@ unfiltered request bodies in audit payloads.
 
 ## Migrations and checks
 
-Add ordered schema changes to `controllerMigrations` in `src/migrations.ts`.
+Add ordered schema changes to `controllerMigrations` in `src/state/migrations.ts`.
 Do not edit an applied migration; add the next version and cover upgrade,
 reopen and constraint behavior in temporary-database tests. `openDatabase`
 verifies WAL mode, `synchronous=FULL`, foreign keys and the busy timeout before

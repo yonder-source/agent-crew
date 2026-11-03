@@ -1,5 +1,5 @@
-import { createLogger, startController } from './controller.js';
-import { loadConfig } from './config.js';
+import { createLogger, startController } from './app/controller.js';
+import { loadConfig } from './app/config.js';
 
 const result = loadConfig(process.env);
 

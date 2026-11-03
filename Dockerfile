@@ -9,7 +9,7 @@ RUN apt-get update \
 COPY package.json package-lock.json ./
 RUN npm ci
 
-COPY tsconfig.json ./
+COPY tsconfig.json tsconfig.build.json ./
 COPY scripts/clean.mjs ./scripts/clean.mjs
 COPY src ./src
 RUN npm run build
