@@ -178,20 +178,15 @@ export class PublicationCoordinator {
     }
     const candidateBlock = this.currentnessBlock(candidate);
     if (candidateBlock) return this.blocked(candidateBlock);
-    const latestExecution = this.state.database.prepare(`
-      SELECT execution_id, ownership_generation, lifecycle
-      FROM executions WHERE job_id = ? ORDER BY rowid DESC LIMIT 1
-    `).get(candidate.jobId) as { execution_id: string; ownership_generation: number; lifecycle: string } | undefined;
-    if (!latestExecution || latestExecution.execution_id !== candidate.executionId ||
-      latestExecution.ownership_generation !== candidate.ownershipGeneration ||
-      (latestExecution.lifecycle !== 'active' && latestExecution.lifecycle !== 'terminal')) {
-      return this.blocked('candidate_execution_not_current');
-    }
     const policy = await this.policy.resolve(candidate);
     const afterPolicyBlock = this.currentnessBlock(candidate);
     if (afterPolicyBlock) return this.blocked(afterPolicyBlock);
     const target = policy.target;
     this.validateTarget(target);
+    if (this.hasConflictingWrite(candidate.repositoryId, target.taskBranch,
+      [input.pushOperationId, input.pullRequestOperationId])) {
+      return this.pending('publication_write_unresolved');
+    }
     const existingBinding = this.state.database.prepare(
       'SELECT repository_id, task_branch, base_branch, pull_request_number FROM publication_bindings WHERE job_id = ?',
     ).get(candidate.jobId) as {
@@ -240,12 +235,14 @@ export class PublicationCoordinator {
     const afterExportBlock = this.currentnessBlock(candidate);
     if (afterExportBlock) return this.blocked(afterExportBlock);
 
+    const previousPullRequestOperation = this.effects.get(input.pullRequestOperationId);
     const inspection = await this.inspect(candidate.repositoryId, target, candidate.jobId);
     if (!inspection.authoritative) return this.pending('provider_read_incomplete');
     const afterInspectionBlock = this.currentnessBlock(candidate);
     if (afterInspectionBlock) return this.blocked(afterInspectionBlock);
-    if (inspection.pullRequest && (!existingBinding ||
-      inspection.pullRequest.number !== existingBinding.pull_request_number ||
+    if (inspection.pullRequest && (
+      (existingBinding ? inspection.pullRequest.number !== existingBinding.pull_request_number
+        : !this.canReconcilePullRequest(previousPullRequestOperation, candidate, target, inspection.pullRequest)) ||
       inspection.pullRequest.jobMarker !== candidate.jobId ||
       inspection.pullRequest.baseBranch !== target.baseBranch || inspection.pullRequest.state !== 'open')) {
       return this.blocked('unattributed_pull_request');
@@ -312,7 +309,8 @@ export class PublicationCoordinator {
     }
     const pr = afterPush.pullRequest;
     if (existingBinding && !pr) return this.blocked('bound_pull_request_missing');
-    if (pr?.number && (!existingBinding || pr.number !== existingBinding.pull_request_number ||
+    if (pr?.number && ((existingBinding ? pr.number !== existingBinding.pull_request_number
+      : !this.canReconcilePullRequest(previousPullRequestOperation, candidate, target, pr)) ||
       pr.jobMarker !== candidate.jobId || pr.baseBranch !== target.baseBranch)) {
       return this.blocked('unattributed_pull_request');
     }
@@ -321,7 +319,6 @@ export class PublicationCoordinator {
     const beforePrBlock = this.currentnessBlock(candidate);
     if (beforePrBlock) return this.blocked(beforePrBlock);
 
-    const previousPullRequestOperation = this.effects.get(input.pullRequestOperationId);
     const savedPullRequestNumber = expectedPullRequestNumberFromOperation(previousPullRequestOperation);
     const expectedPullRequestNumber = savedPullRequestNumber === undefined
       ? existingBinding?.pull_request_number ?? null
@@ -524,8 +521,7 @@ export class PublicationCoordinator {
     return this.state.runWithStaleAudit(candidate.jobId, writerGeneration, occurredAt, 'publication_binding', () => {
       this.state.assertWriter(writerGeneration, occurredAt);
       const job = this.state.getJobOrThrow(candidate.jobId);
-      if (job.repository_id !== candidate.repositoryId || job.issue_id !== candidate.issueId ||
-        job.scope_revision_id !== candidate.scopeRevisionId) return false;
+      if (this.currentnessBlock(candidate) !== null) return false;
       const existing = this.state.database.prepare(
         'SELECT * FROM publication_bindings WHERE job_id = ?',
       ).get(candidate.jobId) as {
@@ -619,6 +615,7 @@ export class PublicationCoordinator {
       return status;
     }
     if (!input.isCurrent()) return 'unknown';
+    if (this.hasConflictingWrite(input.candidate.repositoryId, input.target.taskBranch, [input.operationId])) return 'unknown';
     if (!this.effects.claimStepStart(input.operationId, step.stepId, input.generation)) return 'unknown';
     const started = this.effects.get(input.operationId)?.steps[0];
     if (!started) return 'unknown';
@@ -696,14 +693,66 @@ export class PublicationCoordinator {
   }
 
   private publicationCurrent(candidate: NonNullable<ReturnType<CandidateStore['get']>>): boolean {
-    return this.candidates.latestForJob(candidate.jobId)?.candidateId === candidate.candidateId &&
-      this.currentnessBlock(candidate) === null;
+    return this.currentnessBlock(candidate) === null;
+  }
+
+  private hasConflictingWrite(repositoryId: string, taskBranch: string, excludedOperationIds: string[]): boolean {
+    const writes = this.state.database.prepare(`
+      SELECT operation.operation_id FROM effect_operations operation
+      WHERE operation.operation_kind IN ('publication_push', 'publication_pull_request')
+        AND json_extract(operation.target_json, '$.repositoryId') = ?
+        AND json_extract(operation.target_json, '$.taskBranch') = ?
+        AND (operation.status = 'unknown' OR EXISTS (
+          SELECT 1 FROM effect_steps step WHERE step.operation_id = operation.operation_id
+            AND step.started_at IS NOT NULL AND step.status IN ('pending', 'unknown')
+        ))
+    `).all(repositoryId, taskBranch) as Array<{ operation_id: string }>;
+    return writes.some((write) => !excludedOperationIds.includes(write.operation_id));
+  }
+
+  private canReconcilePullRequest(
+    operation: EffectOperationView | undefined,
+    candidate: NonNullable<ReturnType<CandidateStore['get']>>,
+    target: PublicationTarget,
+    pullRequest: NonNullable<PublicationInspection['pullRequest']>,
+  ): boolean {
+    if (!operation || operation.operation.jobId !== candidate.jobId ||
+      operation.operation.operationKind !== 'publication_pull_request' ||
+      operation.operation.scopeRevisionId !== candidate.scopeRevisionId ||
+      operation.operation.policyVersion !== candidate.policyVersion) return false;
+    const step = operation.steps.find((item) => item.stepKey === 'write');
+    if (!step?.startedAt || step.status === 'confirmed_failure') return false;
+    try {
+      const savedTarget = JSON.parse(operation.operation.targetJson) as {
+        repositoryId?: unknown; taskBranch?: unknown; candidateSha?: unknown; expectedPullRequestNumber?: unknown;
+      };
+      const grant = JSON.parse(operation.authorization.grantJson) as { candidateId?: unknown };
+      if (savedTarget.repositoryId !== candidate.repositoryId || savedTarget.taskBranch !== target.taskBranch ||
+        savedTarget.candidateSha !== candidate.candidateSha || grant.candidateId !== candidate.candidateId ||
+        !sameSha(pullRequest.headSha, candidate.candidateSha) ||
+        (savedTarget.expectedPullRequestNumber !== null && savedTarget.expectedPullRequestNumber !== pullRequest.number)) return false;
+      if (step.status === 'confirmed_success') {
+        const receipt = publicationInspectionFromEffectResult(JSON.parse(step.resultJson ?? 'null'));
+        return receipt?.pullRequest?.number === pullRequest.number;
+      }
+      return true;
+    } catch { return false; }
   }
 
   private currentnessBlock(candidate: NonNullable<ReturnType<CandidateStore['get']>>): string | null {
     const job = this.state.getJobOrThrow(candidate.jobId);
+    if (job.requested_control !== 'run') return 'job_control_blocks_publication';
     if (job.repository_id !== candidate.repositoryId || job.issue_id !== candidate.issueId ||
       job.scope_revision_id !== candidate.scopeRevisionId) return 'stale_candidate_binding';
+    const latestExecution = this.state.database.prepare(`
+      SELECT execution_id, ownership_generation, lifecycle
+      FROM executions WHERE job_id = ? ORDER BY rowid DESC LIMIT 1
+    `).get(candidate.jobId) as { execution_id: string; ownership_generation: number; lifecycle: string } | undefined;
+    if (!latestExecution || latestExecution.execution_id !== candidate.executionId ||
+      latestExecution.ownership_generation !== candidate.ownershipGeneration ||
+      (latestExecution.lifecycle !== 'active' && latestExecution.lifecycle !== 'terminal')) {
+      return 'candidate_execution_not_current';
+    }
     const issueRead = this.state.database.prepare(`
       SELECT observation.status, observation.scope_revision_id
       FROM issue_read_heads head JOIN issue_read_observations observation USING (observation_id)

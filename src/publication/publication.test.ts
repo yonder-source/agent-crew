@@ -167,7 +167,7 @@ function setup(options: {
     policy,
   );
   return {
-    fixture, coordinator, provider, getCurrent: () => current,
+    fixture, coordinator, provider, policy, getCurrent: () => current,
     setTarget: (value: PublicationTarget) => { resolvedTarget = value; },
     counts: () => ({ pushCount, pullRequestCount, preservationCount }),
   };
@@ -183,8 +183,139 @@ function request() {
   };
 }
 
+function saveNewerCandidate(state: ReturnType<typeof setup>): void {
+  state.fixture.database.prepare(`
+    INSERT INTO candidate_submissions (
+      candidate_id, job_id, execution_id, ownership_generation, repository_id, issue_id,
+      scope_revision_id, policy_version, source_bundle_id, base_sha, candidate_sha,
+      reported_validation_json, submitted_at
+    ) SELECT 'candidate-2', job_id, execution_id, ownership_generation, repository_id, issue_id,
+      scope_revision_id, policy_version, source_bundle_id, base_sha, ?, reported_validation_json, submitted_at
+      FROM candidate_submissions WHERE candidate_id = ?
+  `).run('d'.repeat(40), candidate.candidateId);
+}
+
+for (const lostAt of ['write_response', 'final_readback'] as const) {
+  test(`reconciles a created PR after losing ${lostAt} across calls`, async () => {
+    const state = setup();
+    const inspect = state.provider.inspect;
+    const create = state.provider.createOrUpdatePullRequest;
+    let unavailable = false;
+    let readsAfterCreate = 0;
+    state.provider.createOrUpdatePullRequest = async (input) => {
+      await create(input);
+      if (lostAt === 'write_response') { unavailable = true; throw new Error('response lost'); }
+    };
+    state.provider.inspect = async (input) => {
+      if (state.getCurrent().pullRequest && lostAt === 'final_readback' && ++readsAfterCreate === 2) unavailable = true;
+      return unavailable ? { authoritative: false, branchHead: null, pullRequest: null } : inspect(input);
+    };
+    try {
+      assert.equal((await state.coordinator.publish(request())).status, 'pending');
+      unavailable = false;
+      const result = await state.coordinator.publish(request());
+      assert.deepEqual(result, { status: 'published', pullRequestNumber: 12, reason: null });
+      assert.equal(state.counts().pullRequestCount, 1);
+    } finally { state.fixture.close(); }
+  });
+}
+
+test('rejects an unbound remote PR without a matching started intent', async () => {
+  const state = setup({ initial: {
+    authoritative: true, branchHead: candidate.candidateSha,
+    pullRequest: { number: 12, headSha: candidate.candidateSha, baseBranch: 'main', state: 'open', jobMarker: candidate.jobId },
+  } });
+  try {
+    assert.equal((await state.coordinator.publish(request())).reason, 'unattributed_pull_request');
+    assert.equal(state.counts().pushCount, 0);
+  } finally { state.fixture.close(); }
+});
+
+for (const stage of ['policy', 'source_export', 'push_preflight', 'pr_preflight', 'final_readback'] as const) {
+  test(`rechecks execution ownership after ${stage}`, async () => {
+    const state = setup();
+    const replace = () => {
+      const job = state.fixture.jobs.get(candidate.jobId);
+      assert.ok(job);
+      state.fixture.executions.reserve({ executionId: 'replacement-execution', jobId: job.jobId,
+        expectedJobVersion: job.rowVersion, writerGeneration: 1 });
+    };
+    if (stage === 'policy') {
+      const resolve = state.policy.resolve;
+      state.policy.resolve = async (input) => { replace(); return resolve(input); };
+    } else if (stage === 'source_export') {
+      const inspect = state.provider.inspectCandidateExport;
+      state.provider.inspectCandidateExport = async (input) => { replace(); return inspect(input); };
+    } else {
+      const inspect = state.provider.inspect;
+      const targetRead = { push_preflight: 2, pr_preflight: 5, final_readback: 7 }[stage];
+      let reads = 0;
+      state.provider.inspect = async (input) => { if (++reads === targetRead) replace(); return inspect(input); };
+    }
+    try {
+      assert.notEqual((await state.coordinator.publish(request())).status, 'published');
+      if (stage === 'policy' || stage === 'source_export' || stage === 'push_preflight') assert.equal(state.counts().pushCount, 0);
+      if (stage !== 'final_readback') assert.equal(state.counts().pullRequestCount, 0);
+      assert.equal(state.fixture.database.prepare('SELECT 1 FROM publication_bindings WHERE job_id = ?').get(candidate.jobId), undefined);
+    } finally { state.fixture.close(); }
+  });
+}
+
+for (const uncertainKind of ['push', 'pull_request'] as const) {
+  test(`fences a newer candidate behind an unresolved ${uncertainKind}`, async () => {
+    const state = setup();
+    const inspect = state.provider.inspect;
+    let unavailable = false;
+    let uncertainWrites = 0;
+    const uncertainWrite = async () => { uncertainWrites += 1; unavailable = true; throw new Error('unknown write'); };
+    if (uncertainKind === 'push') state.provider.pushCandidate = uncertainWrite;
+    else state.provider.createOrUpdatePullRequest = uncertainWrite;
+    state.provider.inspect = async (input) => unavailable
+      ? { authoritative: false, branchHead: null, pullRequest: null } : inspect(input);
+    try {
+      assert.equal((await state.coordinator.publish(request())).status, 'pending');
+      unavailable = false;
+      saveNewerCandidate(state);
+      const result = await state.coordinator.publish({ ...request(), candidateId: 'candidate-2',
+        pushOperationId: 'next-push', pullRequestOperationId: 'next-pr' });
+      assert.equal(result.reason, 'publication_write_unresolved');
+      assert.equal(uncertainWrites, 1);
+      assert.equal(state.fixture.effects.get('next-push'), undefined);
+    } finally { state.fixture.close(); }
+  });
+}
+
+test('fences a second publication while the first branch write is in flight', async () => {
+  const state = setup();
+  let release: () => void = () => {};
+  let started: () => void = () => {};
+  const waiting = new Promise<void>((resolve) => { release = resolve; });
+  const writing = new Promise<void>((resolve) => { started = resolve; });
+  const push = state.provider.pushCandidate;
+  state.provider.pushCandidate = async (input) => { started(); await waiting; await push(input); };
+  try {
+    const first = state.coordinator.publish(request());
+    await writing;
+    const second = await state.coordinator.publish({ ...request(), pushOperationId: 'other-push', pullRequestOperationId: 'other-pr' });
+    assert.equal(second.reason, 'publication_write_unresolved');
+    release();
+    assert.equal((await first).status, 'published');
+    assert.equal(state.counts().pushCount, 1);
+  } finally { release(); state.fixture.close(); }
+});
+
 test('publishes one exact candidate with durable push and PR receipts', async () => {
   const state = setup();
+  const push = state.provider.pushCandidate;
+  const create = state.provider.createOrUpdatePullRequest;
+  state.provider.pushCandidate = async (input) => {
+    assert.ok(state.fixture.effects.get('publish-push-1')?.steps[0]?.startedAt);
+    await push(input);
+  };
+  state.provider.createOrUpdatePullRequest = async (input) => {
+    assert.ok(state.fixture.effects.get('publish-pr-1')?.steps[0]?.startedAt);
+    await create(input);
+  };
   try {
     const result = await state.coordinator.publish(request());
     assert.deepEqual(result, { status: 'published', pullRequestNumber: 12, reason: null });
@@ -213,6 +344,7 @@ test('blocks unexpected branch heads and protected changes without exact approva
   const branchRace = setup({ initial: { authoritative: true, branchHead: 'd'.repeat(40), pullRequest: null } });
   const preserve = branchRace.provider.preserveUnexpectedBranch;
   branchRace.provider.preserveUnexpectedBranch = async (input) => {
+    assert.ok(branchRace.fixture.effects.get(input.operationId)?.steps[0]?.startedAt);
     await preserve(input);
     throw new Error('checkpoint response lost');
   };
