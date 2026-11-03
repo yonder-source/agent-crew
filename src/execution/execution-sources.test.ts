@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { rmSync } from 'node:fs';
+import { existsSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { createSourceFixture } from '../../tests/fixtures/execution-source-fixture.js';
 
@@ -57,5 +57,48 @@ test('reconciles an archive written before its receipt and a restore completed b
     assert.throws(() => f.sources.restore(request));
     f.database.exec('DROP TRIGGER interrupt_restore');
     assert.equal(f.sources.restore(request).head,artifact.headSha);
+  } finally { f.close(); }
+});
+
+for (const scenario of ['never_created', 'removed'] as const) {
+  test(`missing restore destination remains a modeled reconciliation state: ${scenario}`, async () => {
+    const f = await createSourceFixture();
+    try {
+      await f.stop();
+      const artifact = f.sources.capture({ commandId: 'capture-missing-destination', runId: f.run.runId, writerGeneration: 1 });
+      const request = { commandId: 'restore-missing-destination', artifactId: artifact.artifactId,
+        destination: join(f.directory, 'missing-destination'), writerGeneration: 1 };
+      if (scenario === 'never_created') {
+        f.commands.intent(request.commandId, artifact.runId, 'checkpoint',
+          { action: 'restore', artifactId: artifact.artifactId, destination: request.destination }, 1);
+        assert.equal(f.commands.claim(request.commandId, 1), true);
+      } else {
+        f.sources.restore(request);
+        rmSync(request.destination, { recursive: true });
+      }
+      const before = f.commands.get(request.commandId);
+      assert.throws(() => f.sources.restore(request), {
+        name: 'StateError', code: 'RESTORE_RECONCILIATION_REQUIRED',
+      });
+      assert.equal(existsSync(request.destination), false);
+      const after = f.commands.get(request.commandId);
+      assert.equal(after?.started, true);
+      assert.equal(after?.requestJson, before?.requestJson);
+      assert.equal(after?.receiptJson, before?.receiptJson);
+      assert.equal(f.sources.verify(artifact.artifactId).head, artifact.headSha);
+      assert.equal(f.executions.get('execution-1')?.lifecycle, 'stopping');
+    } finally { f.close(); }
+  });
+}
+
+test('a missing source artifact remains a modeled integrity failure with its reference retained', async () => {
+  const f = await createSourceFixture();
+  try {
+    const artifact = f.sources.capture({ commandId: 'missing-artifact', runId: f.run.runId, writerGeneration: 1 });
+    const row = f.database.prepare('SELECT storage_path FROM source_artifacts WHERE artifact_id = ?')
+      .get(artifact.artifactId) as { storage_path: string };
+    rmSync(row.storage_path);
+    assert.throws(() => f.sources.verify(artifact.artifactId), { name: 'StateError', code: 'SOURCE_ARTIFACT_INVALID' });
+    assert.equal(f.sources.get(artifact.artifactId)?.archiveSha256, artifact.archiveSha256);
   } finally { f.close(); }
 });

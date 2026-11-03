@@ -98,8 +98,8 @@ export class ExecutionSources {
   verify(artifactId: string): SourceManifest {
     const artifact = this.requireArtifact(artifactId);
     const path = this.path(artifactId);
-    const stat = lstatSync(path);
-    if (!stat.isFile() || stat.isSymbolicLink() || stat.size !== artifact.bytes) throw new StateError('SOURCE_ARTIFACT_INVALID', 'Artifact file identity or length changed');
+    const stat = lstatSync(path, { throwIfNoEntry: false });
+    if (!stat || !stat.isFile() || stat.isSymbolicLink() || stat.size !== artifact.bytes) throw new StateError('SOURCE_ARTIFACT_INVALID', 'Artifact file is missing or its identity or length changed');
     const manifest = this.archives.verify(readFileSync(path),artifact.archiveSha256);
     if (manifest.head !== artifact.headSha) throw new StateError('SOURCE_ARTIFACT_INVALID', 'Artifact HEAD changed');
     return manifest;
@@ -113,8 +113,8 @@ export class ExecutionSources {
     this.commands.intent(input.commandId,artifact.runId,'checkpoint',
       { action: 'restore', artifactId: artifact.artifactId, destination: input.destination },input.writerGeneration);
     if (!this.commands.claim(input.commandId,input.writerGeneration)) {
-      const stat = lstatSync(input.destination);
-      if (!stat.isDirectory() || stat.isSymbolicLink()) throw new StateError('RESTORE_RECONCILIATION_REQUIRED','Restore destination is unsafe');
+      const stat = lstatSync(input.destination, { throwIfNoEntry: false });
+      if (!stat || !stat.isDirectory() || stat.isSymbolicLink()) throw new StateError('RESTORE_RECONCILIATION_REQUIRED','Restore destination is missing or unsafe');
       const expected = this.verify(artifact.artifactId);
       const observed = this.archives.capture(input.destination);
       const actual = this.archives.verify(observed.bytes,observed.sha256);
