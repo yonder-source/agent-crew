@@ -4,7 +4,7 @@ import {
   evaluatePublicationReadiness,
   type RequiredPublicationCheck,
 } from './publication-evidence.js';
-import type { PublicationEvidenceStore } from './publication-evidence.js';
+import type { PublicationDecisionEvidence, PublicationEvidenceReader, PublicationEvidenceStore } from './publication-evidence.js';
 import { assertText, StateError, type StateContext } from '../state/state-common.js';
 
 export type DeliveryVerification = {
@@ -59,25 +59,23 @@ export class DeliveryStore {
     private readonly state: StateContext,
     private readonly candidates: CandidateStore,
     private readonly evidence: PublicationEvidenceStore,
+    private readonly reader: PublicationEvidenceReader,
   ) {}
 
-  verify(input: {
+  async verify(input: {
     verificationId: string;
     candidateId: string;
-    snapshotId: string;
     expectedJobVersion: number;
     currentBaseSha: string;
     policyVersion: string;
     requiredChecks: RequiredPublicationCheck[];
     authorizedReviewers: string[];
-    observedNow: string;
     maximumEvidenceAgeMs: number;
     writerGeneration: number;
-  }): DeliveryVerification {
+  }): Promise<DeliveryVerification> {
     for (const [name, value] of Object.entries({
       verificationId: input.verificationId,
       candidateId: input.candidateId,
-      snapshotId: input.snapshotId,
       currentBaseSha: input.currentBaseSha,
       policyVersion: input.policyVersion,
     })) assertText(value, name);
@@ -89,19 +87,25 @@ export class DeliveryStore {
     const candidate = this.candidates.get(input.candidateId);
     if (!candidate) throw new StateError('CANDIDATE_NOT_FOUND', 'Delivery candidate does not exist');
     const job = this.state.getJobOrThrow(candidate.jobId);
-    const snapshot = this.evidence.get(input.snapshotId);
-    if (!snapshot) throw new StateError('PUBLICATION_SNAPSHOT_NOT_FOUND', 'Delivery requires a saved provider snapshot');
-    const previous = this.get(input.verificationId);
-    if (previous) {
-      if (previous.candidateId === input.candidateId && previous.snapshotId === input.snapshotId) return previous;
-      throw new StateError('DELIVERY_VERIFICATION_ID_CONFLICT', 'Verification identity was reused with changed evidence');
+    const previous = this.matchingVerification(input);
+    if (previous) return previous;
+    let fresh: PublicationDecisionEvidence;
+    try {
+      fresh = await this.evidence.refreshForDecision({ candidateId: candidate.candidateId, purpose: 'delivery',
+        expectedJobVersion: input.expectedJobVersion, writerGeneration: input.writerGeneration }, this.reader);
+    } catch (error) {
+      const concurrent = this.matchingVerification(input);
+      if (concurrent) return concurrent;
+      throw error;
     }
+    const snapshot = fresh.snapshot;
+    const occurredAt = this.state.now().toISOString();
 
     const reasons = new Set<string>();
     if (this.candidates.latestForJob(candidate.jobId)?.candidateId !== input.candidateId) {
       reasons.add('candidate_not_current');
     }
-    if (this.evidence.latest(input.candidateId)?.snapshotId !== input.snapshotId) reasons.add('provider_snapshot_not_latest');
+    if (this.evidence.latest(input.candidateId)?.snapshotId !== snapshot.snapshotId) reasons.add('provider_snapshot_not_latest');
     const readiness = evaluatePublicationReadiness({
       candidate,
       snapshot,
@@ -109,7 +113,7 @@ export class DeliveryStore {
       policyVersion: input.policyVersion,
       requiredChecks: input.requiredChecks,
       authorizedReviewers: input.authorizedReviewers,
-      observedNow: input.observedNow,
+      observedNow: occurredAt,
       maximumAgeMs: input.maximumEvidenceAgeMs,
       allowMerged: true,
     });
@@ -127,14 +131,13 @@ export class DeliveryStore {
       reasons: [...reasons],
       checksExecuted: readiness.checksExecuted,
     };
-    const occurredAt = this.state.now().toISOString();
     return this.state.runWithStaleAudit(job.job_id, input.writerGeneration, occurredAt, 'delivery_verification', () => {
       this.state.assertWriter(input.writerGeneration, occurredAt);
       const currentJob = this.state.getJobOrThrow(job.job_id);
-      if (currentJob.row_version !== input.expectedJobVersion || currentJob.scope_revision_id !== candidate.scopeRevisionId) {
+      if (currentJob.row_version !== fresh.jobVersion || currentJob.scope_revision_id !== candidate.scopeRevisionId) {
         throw new StateError('STALE_DELIVERY_JOB', 'Job changed before delivery verification was saved');
       }
-      if (this.evidence.latest(input.candidateId)?.snapshotId !== input.snapshotId) {
+      if (this.evidence.latest(input.candidateId)?.snapshotId !== snapshot.snapshotId) {
         result.status = 'blocked';
         result.reasons = [...new Set([...result.reasons, 'provider_snapshot_changed'])];
       }
@@ -165,7 +168,7 @@ export class DeliveryStore {
         payload: {
           verificationId: input.verificationId,
           candidateId: input.candidateId,
-          snapshotId: input.snapshotId,
+          snapshotId: snapshot.snapshotId,
           status: result.status,
           reasons: result.reasons,
         },
@@ -181,6 +184,14 @@ export class DeliveryStore {
       'SELECT * FROM delivery_verifications WHERE verification_id = ?',
     ).get(verificationId) as RawVerification | undefined;
     return row ? mapVerification(row) : undefined;
+  }
+
+  private matchingVerification(input: { verificationId: string; candidateId: string }): DeliveryVerification | undefined {
+    const previous = this.get(input.verificationId);
+    if (previous && previous.candidateId !== input.candidateId) {
+      throw new StateError('DELIVERY_VERIFICATION_ID_CONFLICT', 'Verification identity was reused with changed evidence');
+    }
+    return previous;
   }
 
   latest(jobId: string): DeliveryVerification | undefined {

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { CandidateStore } from './candidates.js';
-import { PublicationEvidenceStore, type PublicationEvidenceSnapshot } from './publication-evidence.js';
+import { PublicationEvidenceStore, type PublicationEvidenceReader, type PublicationEvidenceSnapshot } from './publication-evidence.js';
 import { RepairStore } from './repairs.js';
 import { recordConfirmedPublication } from '../../tests/fixtures/publication-test-support.js';
 import { StateError } from '../state/state-common.js';
@@ -47,10 +47,17 @@ function setup(authorized = true) {
     }],
   };
   evidence.record(snapshot, 1);
+  let reads = 0;
+  const reader: PublicationEvidenceReader = { readFresh: async (request) => {
+    assert.equal(fixture.database.inTransaction, false);
+    assert.equal(request.purpose, 'repair');
+    reads += 1;
+    return { ...snapshot, snapshotId: request.snapshotId, observedAt: fixture.state.now().toISOString() };
+  } };
   const store = new RepairStore(fixture.state, candidates, evidence, fixture.executions, {
     isAuthorized: () => authorized,
-  });
-  return { fixture, candidate, evidence, store, observedAt };
+  }, reader);
+  return { fixture, candidate, evidence, store, reader, snapshot, reads: () => reads };
 }
 
 function input(state: ReturnType<typeof setup>, overrides: Partial<Parameters<RepairStore['reserve']>[0]> = {}) {
@@ -58,19 +65,19 @@ function input(state: ReturnType<typeof setup>, overrides: Partial<Parameters<Re
   assert.ok(job);
   return {
     reservationId: 'repair-reservation-1', candidateId: state.candidate.candidateId,
-    evidenceSnapshotId: 'repair-snapshot-1', executionId: 'execution-repair-1',
+    executionId: 'execution-repair-1',
     expectedJobVersion: job.rowVersion, currentBaseSha: 'b'.repeat(40), policyVersion: 'policy-1',
     requiredChecks: [{ checkName: 'ci', producer: 'github-actions', workflowIdentity: null, allowNeutralOrSkipped: false }],
-    authorizedReviewers: [], observedNow: state.observedAt, maximumEvidenceAgeMs: 120_000,
+    authorizedReviewers: [], maximumEvidenceAgeMs: 120_000,
     writerGeneration: 1, ...overrides,
   };
 }
 
-test('atomically reserves one repair execution and deduplicates retries across the same reservation', () => {
+test('atomically reserves one repair execution and deduplicates retries across the same reservation', async () => {
   const state = setup();
   try {
     const request = input(state, { authorizedReviewers: ['human:reviewer-1'] });
-    const reserved = state.store.reserve(request);
+    const reserved = await state.store.reserve(request);
     assert.equal(reserved.cycleNumber, 1);
     assert.equal(reserved.executionId, 'execution-repair-1');
     assert.deepEqual(reserved.actionableFeedback, [
@@ -81,17 +88,19 @@ test('atomically reserves one repair execution and deduplicates retries across t
         comments: [{ commentId: 'comment-1', path: 'src/example.ts', line: 12, body: 'This branch needs a guard.' }],
       },
     ]);
-    assert.deepEqual(state.store.reserve(request), reserved);
+    assert.deepEqual(await state.store.reserve(request), reserved);
+    assert.equal(state.reads(), 1);
+    assert.notEqual(reserved.evidenceSnapshotId, 'repair-snapshot-1');
     assert.deepEqual(state.store.getAllowance('job-1'), { allowance: 1, usedCount: 1, rowVersion: 2 });
   } finally {
     state.fixture.close();
   }
 });
 
-test('blocks non-actionable or exhausted repairs and requires an authorized allowance extension', () => {
+test('blocks non-actionable or exhausted repairs and requires an authorized allowance extension', async () => {
   const state = setup();
   try {
-    const first = state.store.reserve(input(state));
+    const first = await state.store.reserve(input(state));
     const execution = state.fixture.executions.get(first.executionId);
     assert.ok(execution);
     state.fixture.executions.transition({
@@ -100,7 +109,7 @@ test('blocks non-actionable or exhausted repairs and requires an authorized allo
     });
     const afterRepair = state.fixture.jobs.get('job-1');
     assert.ok(afterRepair);
-    assert.throws(
+    await assert.rejects(
       () => state.store.reserve(input(state, {
         reservationId: 'repair-reservation-2', executionId: 'execution-repair-2',
         expectedJobVersion: afterRepair.rowVersion,
@@ -120,7 +129,7 @@ test('blocks non-actionable or exhausted repairs and requires an authorized allo
     );
     const currentJob = state.fixture.jobs.get('job-1');
     assert.ok(currentJob);
-    const second = state.store.reserve(input(state, {
+    const second = await state.store.reserve(input(state, {
       reservationId: 'repair-reservation-2', executionId: 'execution-repair-2',
       expectedJobVersion: currentJob.rowVersion,
     }));
@@ -131,16 +140,17 @@ test('blocks non-actionable or exhausted repairs and requires an authorized allo
   }
 });
 
-test('rejects discussion, missing evidence and unauthorized extension as repair authority', () => {
+test('rejects unavailable fresh evidence and unauthorized extension as repair authority', async () => {
   const state = setup(false);
   try {
     const currentJob = state.fixture.jobs.get('job-1');
     assert.ok(currentJob);
-    assert.throws(
+    state.reader.readFresh = async () => { throw new Error('GitHub unavailable'); };
+    await assert.rejects(
       () => state.store.reserve(input(state, {
-        evidenceSnapshotId: 'missing', expectedJobVersion: currentJob.rowVersion,
+        expectedJobVersion: currentJob.rowVersion,
       })),
-      (error: unknown) => error instanceof StateError && error.code === 'REPAIR_EVIDENCE_NOT_CURRENT',
+      (error: unknown) => error instanceof StateError && error.code === 'PUBLICATION_REFRESH_UNAVAILABLE',
     );
     assert.throws(
       () => state.store.extendAllowance({
@@ -153,4 +163,46 @@ test('rejects discussion, missing evidence and unauthorized extension as repair 
   } finally {
     state.fixture.close();
   }
+});
+
+for (const changed of ['merged', 'checks_passed', 'checks_pending'] as const) {
+  test(`fresh ${changed} state prevents repair despite a cached failed check`, async () => {
+    const state = setup();
+    if (changed === 'merged') state.snapshot.prState = 'merged';
+    else {
+      const check = state.snapshot.checks[0];
+      assert.ok(check);
+      check.conclusion = changed === 'checks_passed' ? 'success' : 'pending';
+    }
+    try {
+      await assert.rejects(() => state.store.reserve(input(state)),
+        (error: unknown) => error instanceof StateError && error.code === 'REPAIR_TRIGGER_NOT_ACTIONABLE');
+      assert.equal(state.reads(), 1);
+      assert.equal(state.fixture.executions.get('execution-repair-1'), undefined);
+      assert.equal(state.store.getAllowance('job-1'), undefined);
+    } finally { state.fixture.close(); }
+  });
+}
+
+test('repair admission rejects a cached observation returned for a new decision read', async () => {
+  const state = setup();
+  state.reader.readFresh = async () => state.snapshot;
+  try {
+    await assert.rejects(() => state.store.reserve(input(state)),
+      (error: unknown) => error instanceof StateError && error.code === 'PUBLICATION_REFRESH_MISMATCH');
+    assert.equal(state.fixture.executions.get('execution-repair-1'), undefined);
+    assert.equal(state.store.getAllowance('job-1'), undefined);
+  } finally { state.fixture.close(); }
+});
+
+test('concurrent retries share one repair execution and allowance reservation', async () => {
+  const state = setup();
+  try {
+    const request = input(state);
+    const [first, duplicate] = await Promise.all([state.store.reserve(request), state.store.reserve(request)]);
+    assert.deepEqual(first, duplicate);
+    assert.equal(state.store.getAllowance('job-1')?.usedCount, 1);
+    const saved = state.fixture.database.prepare('SELECT COUNT(*) AS count FROM repair_reservations').get() as { count: number };
+    assert.equal(saved.count, 1);
+  } finally { state.fixture.close(); }
 });

@@ -7,7 +7,7 @@ import {
   type PublicationReadiness,
   type RequiredPublicationCheck,
 } from './publication-evidence.js';
-import type { PublicationEvidenceStore } from './publication-evidence.js';
+import type { PublicationDecisionEvidence, PublicationEvidenceReader, PublicationEvidenceStore } from './publication-evidence.js';
 import { assertText, StateError, type StateContext } from '../state/state-common.js';
 
 export type RepairReservation = {
@@ -80,26 +80,24 @@ export class RepairStore {
     private readonly evidence: PublicationEvidenceStore,
     private readonly executions: ExecutionStore,
     private readonly authorization: RepairAuthorizationVerifier,
+    private readonly reader: PublicationEvidenceReader,
   ) {}
 
-  reserve(input: {
+  async reserve(input: {
     reservationId: string;
     candidateId: string;
-    evidenceSnapshotId: string;
     executionId: string;
     expectedJobVersion: number;
     currentBaseSha: string;
     policyVersion: string;
     requiredChecks: RequiredPublicationCheck[];
     authorizedReviewers: string[];
-    observedNow: string;
     maximumEvidenceAgeMs: number;
     writerGeneration: number;
-  }): RepairReservation {
+  }): Promise<RepairReservation> {
     for (const [name, value] of Object.entries({
       reservationId: input.reservationId,
       candidateId: input.candidateId,
-      evidenceSnapshotId: input.evidenceSnapshotId,
       executionId: input.executionId,
     })) assertText(value, name);
     if (!Number.isSafeInteger(input.expectedJobVersion) || input.expectedJobVersion < 1 ||
@@ -112,18 +110,28 @@ export class RepairStore {
       throw new StateError('REPAIR_CANDIDATE_NOT_CURRENT', 'Only the job\'s latest candidate may start repair');
     }
     const job = this.state.getJobOrThrow(candidate.jobId);
-    const occurredAt = this.state.now().toISOString();
-    const prior = this.get(input.reservationId);
-    if (prior) {
-      if (prior.jobId === candidate.jobId && prior.candidateId === input.candidateId &&
-        prior.evidenceSnapshotId === input.evidenceSnapshotId && prior.executionId === input.executionId) return prior;
-      throw new StateError('REPAIR_RESERVATION_ID_CONFLICT', 'Repair reservation identity was reused with changed data');
+    const prior = this.matchingReservation(input);
+    if (prior) return prior;
+
+    const allowance = this.getAllowance(candidate.jobId);
+    if (allowance && allowance.usedCount >= allowance.allowance) {
+      throw new StateError('REPAIR_ALLOWANCE_EXHAUSTED', 'Automated repair allowance is exhausted');
     }
+    let fresh: PublicationDecisionEvidence;
+    try {
+      fresh = await this.evidence.refreshForDecision({ candidateId: candidate.candidateId, purpose: 'repair',
+        expectedJobVersion: input.expectedJobVersion, writerGeneration: input.writerGeneration }, this.reader);
+    } catch (error) {
+      const concurrent = this.matchingReservation(input);
+      if (concurrent) return concurrent;
+      throw error;
+    }
+    const occurredAt = this.state.now().toISOString();
 
     return this.state.runWithStaleAudit(job.job_id, input.writerGeneration, occurredAt, 'repair_reservation', () => {
       this.state.assertWriter(input.writerGeneration, occurredAt);
       const currentJob = this.state.getJobOrThrow(job.job_id);
-      if (currentJob.row_version !== input.expectedJobVersion) {
+      if (currentJob.row_version !== fresh.jobVersion) {
         throw new StateError('STALE_ROW_VERSION', 'Job changed before repair admission');
       }
       if (currentJob.scope_revision_id !== candidate.scopeRevisionId || currentJob.requested_control !== 'run') {
@@ -132,11 +140,11 @@ export class RepairStore {
       if (this.candidates.latestForJob(candidate.jobId)?.candidateId !== candidate.candidateId) {
         throw new StateError('REPAIR_CANDIDATE_NOT_CURRENT', 'Candidate changed before repair admission');
       }
-      const snapshot = this.evidence.get(input.evidenceSnapshotId);
-      if (!snapshot || this.evidence.latest(input.candidateId)?.snapshotId !== input.evidenceSnapshotId) {
+      const snapshot = fresh.snapshot;
+      if (this.evidence.latest(input.candidateId)?.snapshotId !== snapshot.snapshotId) {
         throw new StateError('REPAIR_EVIDENCE_NOT_CURRENT', 'Repair requires the latest persisted provider snapshot');
       }
-      const readiness = this.evaluate(candidate, snapshot, input);
+      const readiness = this.evaluate(candidate, snapshot, { ...input, observedNow: occurredAt });
       if (readiness.status !== 'repair_required') {
         throw new StateError('REPAIR_TRIGGER_NOT_ACTIONABLE', 'Current evidence does not authorize an automated repair');
       }
@@ -170,7 +178,7 @@ export class RepairStore {
           execution_id, trigger_evidence_json, actionable_feedback_json, writer_generation, reserved_at
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `).run(
-        input.reservationId, job.job_id, cycleNumber, input.candidateId, input.evidenceSnapshotId,
+        input.reservationId, job.job_id, cycleNumber, input.candidateId, snapshot.snapshotId,
         execution.executionId, canonicalJson(readiness.actionableRepairs), canonicalJson(readiness.actionableFeedback),
         input.writerGeneration, occurredAt,
       );
@@ -188,7 +196,7 @@ export class RepairStore {
           cycleNumber,
           executionId: execution.executionId,
           candidateId: input.candidateId,
-          evidenceSnapshotId: input.evidenceSnapshotId,
+          evidenceSnapshotId: snapshot.snapshotId,
         },
         writerGeneration: input.writerGeneration,
         occurredAt,
@@ -267,6 +275,14 @@ export class RepairStore {
       'SELECT * FROM repair_reservations WHERE reservation_id = ?',
     ).get(reservationId) as RawReservation | undefined;
     return row ? mapReservation(row) : undefined;
+  }
+
+  private matchingReservation(input: { reservationId: string; candidateId: string; executionId: string }): RepairReservation | undefined {
+    const prior = this.get(input.reservationId);
+    if (prior && (prior.candidateId !== input.candidateId || prior.executionId !== input.executionId)) {
+      throw new StateError('REPAIR_RESERVATION_ID_CONFLICT', 'Repair reservation identity was reused with changed data');
+    }
+    return prior;
   }
 
   getAllowance(jobId: string): { allowance: number; usedCount: number; rowVersion: number } | undefined {

@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { canonicalJson } from '../effects/effect-model.js';
 import type { CandidateStore, CandidateSubmissionRecord } from './candidates.js';
 import type { EffectStore } from '../effects/effects.js';
@@ -46,6 +47,19 @@ export type PublicationEvidenceSnapshot = {
   checks: PublicationCheckObservation[];
   reviews: PublicationReviewObservation[];
 };
+
+export interface PublicationEvidenceReader {
+  /** Perform an uncached read of PR head/base/state, checks and reviews for this decision. */
+  readFresh(input: {
+    snapshotId: string;
+    purpose: 'repair' | 'delivery';
+    candidate: CandidateSubmissionRecord;
+    pullRequestNumber: number;
+    baseBranch: string;
+  }): Promise<PublicationEvidenceSnapshot>;
+}
+
+export type PublicationDecisionEvidence = { snapshot: PublicationEvidenceSnapshot; jobVersion: number };
 
 type RawSnapshot = {
   snapshot_id: string;
@@ -137,6 +151,48 @@ export class PublicationEvidenceStore {
     private readonly candidates: CandidateStore,
     private readonly effects: EffectStore,
   ) {}
+
+  async refreshForDecision(input: {
+    candidateId: string;
+    purpose: 'repair' | 'delivery';
+    expectedJobVersion: number;
+    writerGeneration: number;
+  }, reader: PublicationEvidenceReader): Promise<PublicationDecisionEvidence> {
+    const candidate = this.candidates.get(input.candidateId);
+    if (!candidate) throw new StateError('CANDIDATE_NOT_FOUND', 'Decision candidate does not exist');
+    const job = this.state.getJobOrThrow(candidate.jobId);
+    const startedAt = this.state.now().toISOString();
+    this.state.assertWriter(input.writerGeneration, startedAt);
+    if (job.row_version !== input.expectedJobVersion) {
+      throw new StateError('STALE_ROW_VERSION', 'Job changed before the decision read');
+    }
+    const binding = this.state.database.prepare(
+      'SELECT pull_request_number, base_branch FROM publication_bindings WHERE job_id = ?',
+    ).get(candidate.jobId) as { pull_request_number: number; base_branch: string } | undefined;
+    if (!binding) throw new StateError('PUBLICATION_PR_NOT_CONFIRMED', 'Decision requires a bound published PR');
+    const snapshotId = randomUUID();
+    let snapshot: PublicationEvidenceSnapshot;
+    try {
+      snapshot = await reader.readFresh({ snapshotId, purpose: input.purpose, candidate,
+        pullRequestNumber: binding.pull_request_number, baseBranch: binding.base_branch });
+    } catch {
+      throw new StateError('PUBLICATION_REFRESH_UNAVAILABLE', 'Fresh provider evidence is unavailable for this decision');
+    }
+    const completedAt = this.state.now().toISOString();
+    if (snapshot.snapshotId !== snapshotId || snapshot.candidateId !== candidate.candidateId ||
+      !Number.isFinite(Date.parse(snapshot.observedAt)) || Date.parse(snapshot.observedAt) < Date.parse(startedAt) ||
+      Date.parse(snapshot.observedAt) > Date.parse(completedAt)) {
+      throw new StateError('PUBLICATION_REFRESH_MISMATCH', 'Evidence does not belong to this decision read');
+    }
+    return this.state.runWithStaleAudit(candidate.jobId, input.writerGeneration, completedAt, 'publication_decision_read', () => {
+      this.state.assertWriter(input.writerGeneration, completedAt);
+      if (this.state.getJobOrThrow(candidate.jobId).row_version !== input.expectedJobVersion) {
+        throw new StateError('STALE_ROW_VERSION', 'Job changed while the decision read was in flight');
+      }
+      const saved = this.record(snapshot, input.writerGeneration);
+      return { snapshot: saved, jobVersion: this.state.getJobOrThrow(candidate.jobId).row_version };
+    });
+  }
 
   record(input: PublicationEvidenceSnapshot, writerGeneration: number): PublicationEvidenceSnapshot {
     this.validate(input, writerGeneration);
@@ -368,7 +424,8 @@ export function evaluatePublicationReadiness(input: {
 
   const reviewsByIdentity = new Map<string, PublicationReviewObservation>();
   for (const review of snapshot.reviews) {
-    if (review.commitSha.toLowerCase() !== candidate.candidateSha || !input.authorizedReviewers.includes(review.reviewerIdentity)) continue;
+    if (review.state === 'commented' || review.commitSha.toLowerCase() !== candidate.candidateSha ||
+      !input.authorizedReviewers.includes(review.reviewerIdentity)) continue;
     const previous = reviewsByIdentity.get(review.reviewerIdentity);
     if (!previous || Date.parse(review.submittedAt) > Date.parse(previous.submittedAt)) {
       reviewsByIdentity.set(review.reviewerIdentity, review);
@@ -379,6 +436,7 @@ export function evaluatePublicationReadiness(input: {
   }
   for (const review of reviewsByIdentity.values()) {
     if (review.state === 'changes_requested') {
+      reasons.push(`authorized_changes_requested:${review.reviewerIdentity}`);
       actionableRepairs.add(`changes_requested:${review.reviewerIdentity}`);
       actionableFeedback.push({
         kind: 'changes_requested',

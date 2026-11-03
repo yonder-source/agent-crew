@@ -8,6 +8,7 @@ import {
   type PublicationEvidenceSnapshot,
 } from './publication-evidence.js';
 import { recordConfirmedPublication } from '../../tests/fixtures/publication-test-support.js';
+import { StateError } from '../state/state-common.js';
 import { createJob, createStateFixture } from '../../tests/fixtures/state-fixture.js';
 
 function setup() {
@@ -137,6 +138,41 @@ test('rejects wrong producers, stale evidence, and revoked candidate approval', 
     state.fixture.close();
   }
 });
+
+test('informational reviews preserve the reviewer\'s effective decision', () => {
+  const state = setup();
+  try {
+    const current = snapshot();
+    const approved = current.reviews[0];
+    assert.ok(approved);
+    current.reviews.push({ ...approved, reviewId: 'comment-2', state: 'commented', submittedAt: '2026-11-03T00:00:30.000Z' });
+    assert.equal(evaluate(state.candidate, current).status, 'ready');
+    approved.state = 'changes_requested';
+    const decision = evaluate(state.candidate, current);
+    assert.equal(decision.status, 'repair_required');
+    assert.ok(decision.reasons.includes('authorized_changes_requested:human:reviewer-1'));
+  } finally { state.fixture.close(); }
+});
+
+for (const changed of ['job', 'writer'] as const) {
+  test(`a changed ${changed} fences a decision read before its evidence can be saved`, async () => {
+    const state = setup();
+    const job = state.fixture.jobs.get(state.candidate.jobId);
+    assert.ok(job);
+    try {
+      await assert.rejects(() => state.store.refreshForDecision({ candidateId: state.candidate.candidateId,
+        purpose: 'delivery', expectedJobVersion: job.rowVersion, writerGeneration: 1 }, {
+        readFresh: async (request) => {
+          if (changed === 'job') state.fixture.jobs.transition({ jobId: job.jobId, expectedVersion: job.rowVersion,
+            writerGeneration: 1, requestedControl: 'pause', eventType: 'operator_pause' });
+          else state.fixture.database.prepare('UPDATE controller_writer SET generation = 2 WHERE singleton_id = 1').run();
+          return { ...snapshot(), snapshotId: request.snapshotId, observedAt: state.fixture.state.now().toISOString() };
+        },
+      }), (error: unknown) => error instanceof StateError && error.code === (changed === 'job' ? 'STALE_ROW_VERSION' : 'STALE_GENERATION'));
+      assert.equal(state.store.latest(state.candidate.candidateId), undefined);
+    } finally { state.fixture.close(); }
+  });
+}
 
 test('opens bounded-repair eligibility only for current failed checks or authorized change requests', () => {
   const state = setup();
