@@ -37,4 +37,15 @@ docker build -f Dockerfile.check -t agent-crew-check:local .
 docker run --rm agent-crew-check:local
 ```
 
+## Development layout
+
+The Controller is one TypeScript package, grouped by responsibility under
+`src/`; see [Controller modules](docs/architecture.md#2-controller-modules).
+Module tests sit beside their source files. `tests/integration/` contains
+application HTTP and process tests; `tests/fixtures/` contains shared setup.
+
+`npm run typecheck` checks source and tests. `npm test` builds the application
+and runs TypeScript tests through `tsx` and Node's test runner. `npm run build`
+emits only production modules into `dist/`.
+
 Licensed under the [MIT License](LICENSE).

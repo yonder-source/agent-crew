@@ -3,7 +3,7 @@
 .env.*
 !.env.example
 secrets/
-state/
+/state/
 local-state/
 backups/
 artifacts/

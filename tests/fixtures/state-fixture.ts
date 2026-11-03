@@ -1,0 +1,103 @@
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import type Database from 'better-sqlite3';
+import { openDatabase } from '../../src/state/database.js';
+import { ExecutionStore } from '../../src/execution/executions.js';
+import { EffectStore } from '../../src/effects/effects.js';
+import { EffectResultStore } from '../../src/effects/effect-results.js';
+import type { BeginEffectInput } from '../../src/effects/effect-model.js';
+import { JobStore } from '../../src/jobs/jobs.js';
+import { AdmissionStore } from '../../src/admission/admission.js';
+import { IssueScopeStore } from '../../src/issues/issue-scopes.js';
+import { StateContext } from '../../src/state/state-common.js';
+
+export type StateFixture = {
+  directory: string;
+  path: string;
+  database: Database.Database;
+  jobs: JobStore;
+  executions: ExecutionStore;
+  effects: EffectStore;
+  effectResults: EffectResultStore;
+  state: StateContext;
+  close: () => void;
+};
+
+export function createStateFixture(): StateFixture {
+  const directory = mkdtempSync(join(tmpdir(), 'agent-crew-state-'));
+  const path = join(directory, 'controller.sqlite');
+  const database = openDatabase(path);
+  const now = new Date().toISOString();
+  database.prepare(`
+    UPDATE controller_writer
+    SET generation = 1, status = 'healthy', heartbeat_at = ?, updated_at = ?
+    WHERE singleton_id = 1
+  `).run(now, now);
+  const state = new StateContext(database);
+  const effects = new EffectStore(state);
+
+  return {
+    directory,
+    path,
+    database,
+    jobs: new JobStore(state),
+    executions: new ExecutionStore(state),
+    effects,
+    effectResults: new EffectResultStore(state, effects),
+    state,
+    close: () => {
+      database.close();
+      rmSync(directory, { recursive: true, force: true });
+    },
+  };
+}
+
+export function createJob(jobs: JobStore) {
+  return jobs.create({
+    jobId: 'job-1',
+    repositoryId: 'repo-1',
+    issueId: 'issue-1',
+    scopeRevisionId: 'scope-1',
+    phase: 'queued',
+    writerGeneration: 1,
+  });
+}
+
+export function prepareExecutionStartEvidence(fixture: StateFixture, repositoryId: string, issueId: string, scopeRevisionId: string) {
+  const observedAt = new Date().toISOString();
+  new IssueScopeStore(fixture.state).recordCompleteRead({
+    observationId: `start-issue-read-${issueId}`, scopeRevisionId, repositoryId, issueId,
+    sourceRevisionId: `provider-${issueId}`, title: 'Task', body: 'Accepted scope', dependencyIssueIds: [],
+    templateVersion: '1', policyVersion: 'policy-1', observedAt, expectedHeadVersion: 0, writerGeneration: 1,
+  });
+  const readiness = new AdmissionStore(fixture.state).recordReadinessObservation({
+    observationId: `start-readiness-read-${issueId}`, repositoryId, issueId,
+    labelPresent: true, complete: true, observedAt, expectedHeadVersion: 0, writerGeneration: 1,
+  });
+  return { issueHeadVersion: 1, readinessHeadVersion: readiness.headVersion };
+}
+
+export function createEffectInput(
+  fixture: StateFixture,
+  operationId: string,
+  overrides: Partial<BeginEffectInput> = {},
+): BeginEffectInput {
+  const job = fixture.jobs.get('job-1');
+  if (!job) throw new Error('Create the fixture job before an effect');
+  return {
+    operationId,
+    jobId: job.jobId,
+    operationKind: 'github_issue_update',
+    arguments: { body: 'accepted text' },
+    target: { repositoryId: job.repositoryId, issueId: job.issueId },
+    expectedJobVersion: job.rowVersion,
+    scopeRevisionId: job.scopeRevisionId,
+    policyVersion: 'policy-1',
+    callerIdentity: 'human:123',
+    grant: { action: 'issue.write' },
+    steps: [{ stepId: `${operationId}-write`, stepKey: 'write', target: { fields: ['body'] } }],
+    writerGeneration: 1,
+    ...overrides,
+  };
+}

@@ -8,9 +8,10 @@ WORKDIR /workspace
 COPY package.json package-lock.json ./
 RUN npm ci
 
-COPY tsconfig.json ./
+COPY tsconfig.json tsconfig.build.json ./
 COPY scripts ./scripts
 COPY .github/ISSUE_TEMPLATE/agent-task.yml .github/ISSUE_TEMPLATE/agent-task.yml
 COPY src ./src
+COPY tests ./tests
 
 CMD ["npm", "run", "check"]
