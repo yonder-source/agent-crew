@@ -481,6 +481,37 @@ test('reconciles a lost PR response and preserves the exact inspection in its re
   }
 });
 
+test('blocks on a missing PR receipt without crashing', async () => {
+  const state = setup();
+  const originalRecord = state.fixture.effectResults.recordResult;
+  state.fixture.effectResults.recordResult = (input) => {
+    const result = originalRecord.call(state.fixture.effectResults, input);
+    if (input.operationId === 'publish-pr-1' && input.stepId === 'publish-pr-1:write') {
+      state.fixture.database.prepare(`
+        UPDATE effect_steps
+        SET result_json = ?
+        WHERE operation_id = ? AND step_id = ?
+      `).run(JSON.stringify({
+        observation: {
+          authoritative: true,
+          branchHead: candidate.candidateSha,
+          pullRequest: null,
+        },
+      }), input.operationId, input.stepId);
+    }
+    return result;
+  };
+  try {
+    assert.deepEqual(await state.coordinator.publish(request()), {
+      status: 'blocked',
+      pullRequestNumber: null,
+      reason: 'pull_request_receipt_conflict',
+    });
+  } finally {
+    state.fixture.close();
+  }
+});
+
 test('repairs update the one bound task branch and pull request', async () => {
   const state = setup();
   try {

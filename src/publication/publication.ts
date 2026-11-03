@@ -381,10 +381,12 @@ export class PublicationCoordinator {
     } catch {
       confirmedPrInspection = undefined;
     }
+    const confirmedPullRequest = confirmedPrInspection?.pullRequest;
     if (confirmedPrStep?.status !== 'confirmed_success' ||
-      confirmedPrInspection?.pullRequest?.number !== finalRead.pullRequest.number ||
-      confirmedPrInspection.pullRequest?.jobMarker !== candidate.jobId ||
-      !sameSha(confirmedPrInspection.pullRequest.headSha, candidate.candidateSha)) {
+      !confirmedPullRequest ||
+      confirmedPullRequest.number !== finalRead.pullRequest.number ||
+      confirmedPullRequest.jobMarker !== candidate.jobId ||
+      !sameSha(confirmedPullRequest.headSha, candidate.candidateSha)) {
       return this.blocked('pull_request_receipt_conflict');
     }
     if (!this.bindPullRequest(candidate, target, finalRead.pullRequest.number, input.writerGeneration)) {
