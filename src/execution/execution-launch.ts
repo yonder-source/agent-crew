@@ -718,7 +718,7 @@ export class ExecutionLaunchCoordinator {
 								executionId: execution.executionId,
 								expectedVersion: execution.rowVersion,
 								writerGeneration,
-								lifecycle: "terminal",
+								lifecycle: taskId === null ? "terminal" : "stopping",
 								terminalOutcome: "launch_failed",
 								eventPayload: { reasonCode, taskId },
 							});

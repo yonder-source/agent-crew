@@ -13,7 +13,7 @@ test("initializes an empty database and safely reopens it", () => {
 
 	try {
 		const first = openDatabase(path);
-		assert.equal(getSchemaVersion(first), 11);
+		assert.equal(getSchemaVersion(first), 12);
 		assert.equal(first.pragma("journal_mode", { simple: true }), "wal");
 		assert.equal(first.pragma("synchronous", { simple: true }), 2);
 		assert.equal(first.pragma("busy_timeout", { simple: true }), 5_000);
@@ -35,7 +35,7 @@ test("initializes an empty database and safely reopens it", () => {
 		first.close();
 
 		const second = openDatabase(path);
-		assert.equal(getSchemaVersion(second), 11);
+		assert.equal(getSchemaVersion(second), 12);
 		assert.ok(
 			second
 				.prepare(
@@ -140,7 +140,7 @@ test("schema includes unattributable snapshots and preserves issue read heads", 
 			.run();
 
 		runMigrations(database, controllerMigrations);
-		assert.equal(getSchemaVersion(database), 11);
+		assert.equal(getSchemaVersion(database), 12);
 		assert.equal(
 			(
 				database
@@ -231,4 +231,32 @@ test("rejects unsupported future schema versions", () => {
 	} finally {
 		database.close();
 	}
+});
+
+
+test("upgrades the merged WBS4 schema without losing jobs or execution records", () => {
+  const directory = mkdtempSync(join(tmpdir(), "agent-crew-upgrade-"));
+  const path = join(directory, "controller.sqlite");
+  try {
+    const previous = new Database(path);
+    previous.pragma("foreign_keys = ON");
+    runMigrations(previous, controllerMigrations.filter(migration => migration.version <= 9));
+    previous.exec(`
+      INSERT INTO jobs (job_id, repository_id, issue_id, scope_revision_id, phase, requested_control, created_at, updated_at)
+      VALUES ('old-job', 'repo', 'issue', 'scope', 'queued', 'run', '2026-11-03T00:00:00.000Z', '2026-11-03T00:00:00.000Z');
+      INSERT INTO executions (execution_id, job_id, ownership_generation, lifecycle, created_at, updated_at)
+      VALUES ('old-execution', 'old-job', 1, 'reserved', '2026-11-03T00:00:00.000Z', '2026-11-03T00:00:00.000Z');
+    `);
+    previous.close();
+    const upgraded = openDatabase(path);
+    try {
+      assert.equal(getSchemaVersion(upgraded), 12);
+      assert.deepEqual(upgraded.prepare('SELECT lifecycle, ownership_generation FROM executions WHERE execution_id = ?').get('old-execution'),
+        { lifecycle: 'reserved', ownership_generation: 1 });
+      for (const table of ['execution_runs', 'execution_observations', 'execution_commands', 'execution_command_observations', 'source_artifacts']) {
+        assert.ok(upgraded.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?").get(table));
+      }
+      assert.deepEqual(upgraded.pragma('foreign_key_check'), []);
+    } finally { upgraded.close(); }
+  } finally { rmSync(directory, { recursive: true, force: true }); }
 });

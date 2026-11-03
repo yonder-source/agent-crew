@@ -686,4 +686,25 @@ export const controllerMigrations: Migration[] = [
       `);
     },
   },
+  {
+    version: 12,
+    name: "verified-source-artifacts",
+    up: (database: Database.Database) => {
+      database.exec(`
+        CREATE TABLE source_artifacts (
+          artifact_id TEXT PRIMARY KEY,
+          command_id TEXT NOT NULL UNIQUE REFERENCES execution_commands(command_id),
+          run_id TEXT NOT NULL REFERENCES execution_runs(run_id),
+          storage_path TEXT NOT NULL,
+          archive_sha256 TEXT NOT NULL CHECK(length(archive_sha256) = 64),
+          head_sha TEXT NOT NULL,
+          bytes INTEGER NOT NULL CHECK(bytes > 0),
+          kind TEXT NOT NULL CHECK(kind IN ('stopped_checkpoint', 'handoff')),
+          status TEXT NOT NULL CHECK(status IN ('writing', 'verified')),
+          writer_generation INTEGER NOT NULL,
+          created_at TEXT NOT NULL
+        ) STRICT;
+      `);
+    },
+  },
 ];
