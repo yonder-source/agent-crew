@@ -395,7 +395,9 @@ view must be rebuildable.
 Configure the workflow database with SQLite WAL, `synchronous=FULL`, and foreign
 keys enabled. Use short `BEGIN IMMEDIATE` transactions for claims, capacity,
 ownership and effect-intent updates; perform network and runtime work after
-commit. Verify the effective database settings at startup.
+the intent commits. Read-only prerequisite inspections may precede intent;
+all network and runtime work stays outside database transactions. Verify the
+effective database settings at startup.
 
 The Controller writer holds an exclusive host-local OS process lock for its
 entire lifetime. It emits a heartbeat every five seconds; three missed

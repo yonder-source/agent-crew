@@ -20,7 +20,8 @@ artifact digest into the push intent.
 `PublicationCoordinator.publish` derives its repository target and protected
 change classification through the configured `PublicationPolicy`. Before each
 external write, it requires the candidate to remain the job's latest submission
-and the current issue and readiness heads to match its approved scope. It
+from its current execution, with job control permitting publication and the
+current issue and readiness heads matching its approved scope. It
 returns:
 
 | Status | Meaning | Job view |
@@ -31,7 +32,11 @@ returns:
 
 Push and PR create/update are separate durable effect operations. A lost write
 response is reconciled by reading the configured branch and job marker. The
-publisher blocks on an unexpected branch head or an unattributed PR. Protected
+publisher can recover an unbound PR only through the matching previously
+started PR intent or confirmed receipt; a remote job marker alone cannot
+establish attribution. In-flight and unknown publication writes fence the
+repository/task branch across candidates and across push/PR operations.
+The publisher blocks on an unexpected branch head or an unattributed PR. Protected
 or uncertain changes require a decision receipt bound to candidate SHA, base
 SHA and policy version; that evidence is stored in effect authorization.
 An unexpected branch is preserved through a separate durable provider effect;
@@ -48,17 +53,35 @@ revision, confirming PR operation ID, PR number and base branch, check
 identities and producers, synthetic merge parents, current review states, PR
 state and observation time.
 
+Read-only provider inspection can precede effect intent. Pushes, PR updates,
+runtime mutations and source-artifact creation or preservation require durable
+intent before execution; provider reads also run outside database transactions.
+
 `evaluatePublicationReadiness` returns `ready`, `blocked`, or `repair_required`.
 Missing, pending, stale, wrong-target or wrong-producer checks block. Only a
 current required-check failure or an authorized exact-candidate
 `changes_requested` review is actionable repair evidence. Dismissed reviews and
 reviewers who are no longer authorized do not satisfy approval. Allowed
 `neutral` or `skipped` checks are not listed as executed validation.
+Informational `commented` reviews do not replace a reviewer's effective
+decision. An unresolved authorized change request blocks delivery even when
+another reviewer approved or the PR has already merged.
+
+Repair admission and delivery verification invoke the injected
+`PublicationEvidenceReader.readFresh` for each new decision. The reader must
+fetch current PR head/base/state, checks and reviews; saved observations cannot
+be substituted for that read. The Controller supplies a new snapshot ID and
+checks that the observation belongs to the read's time interval. It saves the
+result under writer and job-version fences before evaluating it. A changed
+job or writer, unavailable read, or reused observation blocks the decision.
+`maximumEvidenceAgeMs` bounds the fresh observation's age; it does not authorize
+using a cached snapshot. Repeating an already recorded decision ID returns its
+original result without creating another decision or reservation.
 
 ## Repair
 
-`RepairStore.reserve` re-evaluates the latest saved snapshot and, in one SQLite
-transaction, reserves a new execution and consumes one job-wide repair
+`RepairStore.reserve` performs the fresh decision read and, in one SQLite
+transaction, evaluates it, reserves a new execution and consumes one job-wide repair
 allowance. Repeating the same reservation ID returns the original reservation
 without consuming another attempt. The default allowance is one attempt across
 restarts and scope revisions. Each reservation retains the batch of failed
@@ -70,8 +93,8 @@ immutable human decision receipt before increasing the allowance.
 
 ## Delivery
 
-`DeliveryStore.verify` records an immutable `complete` or `blocked` decision
-from the latest fresh provider snapshot. Completion requires a merged PR, the
+`DeliveryStore.verify` performs the fresh decision read and records an immutable
+`complete` or `blocked` decision from that snapshot. Completion requires a merged PR, the
 exact candidate head, a merge commit with exactly the candidate and verified
 base as parents, current required checks, and current authorized review. A
 merge that bypassed any of these gates is retained as a blocked delivery

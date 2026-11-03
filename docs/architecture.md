@@ -106,7 +106,10 @@ workflow slices.
 | Delivery verification | Immutable complete/blocked outcome tied to the latest merged-PR snapshot |
 
 The effect-delivery module persists intent and an argument fingerprint before
-calling an adapter. Operation identities deduplicate requests; execution and
+executing an external write or runtime mutation through an adapter. Read-only
+provider inspections may precede intent and run outside database transactions.
+Artifact creation or preservation is a mutation and requires its own intent.
+Operation identities deduplicate requests; execution and
 ownership generations fence stale workers. The lifecycle and reconciliation
 rules are defined in [R8](../spec.md#r8-durable-state-and-external-effects).
 
