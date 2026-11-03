@@ -53,6 +53,23 @@ export class ExecutionLaunchCoordinator {
 		private readonly supervisor: RuntimeSupervisor,
 	) {}
 
+	/** Read only the identity already persisted and checked by the launcher. */
+	runtimeBinding(operationId: string): {
+		request: RuntimeTaskStartRequest;
+		taskId: string;
+		confirmed: boolean;
+		startedAt: string;
+	} {
+		const view = this.effects.get(operationId);
+		const step = view?.steps.find((item) => item.stepKey === STEP_KEY);
+		if (!view || !step) throw new StateError("RUNTIME_LAUNCH_NOT_FOUND", "Launch binding is unavailable");
+		const request = parseRequest(step.targetJson);
+		this.assertLaunchRecord(view, request, "INVALID_RUNTIME_LAUNCH_RECORD");
+		const taskId = readTaskId(step.resultJson);
+		if (!taskId || !step.startedAt) throw new StateError("RUNTIME_TASK_UNKNOWN", "Launch has no attributable dispatched task");
+		return { request, taskId, confirmed: step.status === "confirmed_success", startedAt: step.startedAt };
+	}
+
 	async launch(input: LaunchExecutionInput): Promise<ExecutionLaunchResult> {
 		this.validateInput(input);
 		const execution = this.executions.get(input.executionId);
@@ -701,7 +718,7 @@ export class ExecutionLaunchCoordinator {
 								executionId: execution.executionId,
 								expectedVersion: execution.rowVersion,
 								writerGeneration,
-								lifecycle: "terminal",
+								lifecycle: taskId === null ? "terminal" : "stopping",
 								terminalOutcome: "launch_failed",
 								eventPayload: { reasonCode, taskId },
 							});

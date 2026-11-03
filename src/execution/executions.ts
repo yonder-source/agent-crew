@@ -1,3 +1,4 @@
+import { assertExecutionSettled } from './execution-settlement.js';
 import {
   assertText,
   mapExecution,
@@ -57,6 +58,9 @@ export class ExecutionStore {
       if (liveExecution) {
         throw new StateError('LIVE_EXECUTION_EXISTS', 'Job already has a live execution');
       }
+
+      const previous = this.state.database.prepare('SELECT execution_id FROM executions WHERE job_id = ?').all(input.jobId) as { execution_id: string }[];
+      for (const execution of previous) assertExecutionSettled(this.state, execution.execution_id);
 
       this.state.database.prepare(`
         INSERT INTO executions (
@@ -140,7 +144,10 @@ export class ExecutionStore {
         throw new StateError('JOB_CONTROL_BLOCKS_EXECUTION', 'Job control does not permit execution activation');
       }
       const terminalOutcome = input.lifecycle === 'terminal' ? input.terminalOutcome : undefined;
-      if (input.lifecycle === 'terminal') assertText(terminalOutcome ?? '', 'terminalOutcome');
+      if (input.lifecycle === 'terminal') {
+        assertText(terminalOutcome ?? '', 'terminalOutcome');
+        assertExecutionSettled(this.state, input.executionId);
+      }
 
       const nextExecutionVersion = execution.row_version + 1;
       const nextJobVersion = job.row_version + 1;
