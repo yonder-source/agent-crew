@@ -635,4 +635,55 @@ export const controllerMigrations: Migration[] = [
       `);
     },
   },
+  {
+    version: 11,
+    name: "execution-controls",
+    up: (database: Database.Database) => {
+      database.exec(`
+        CREATE TABLE execution_commands (
+          command_id TEXT PRIMARY KEY,
+          run_id TEXT NOT NULL REFERENCES execution_runs(run_id),
+          kind TEXT NOT NULL CHECK(kind IN ('stop', 'deadline', 'checkpoint')),
+          request_json TEXT NOT NULL,
+          started INTEGER NOT NULL DEFAULT 0 CHECK(started IN (0,1)),
+          receipt_json TEXT,
+          created_generation INTEGER NOT NULL,
+          created_at TEXT NOT NULL,
+          UNIQUE(run_id, kind, command_id)
+        ) STRICT;
+        CREATE UNIQUE INDEX one_stop_per_run ON execution_commands(run_id) WHERE kind = 'stop';
+        CREATE TABLE execution_command_observations (
+          observation_id INTEGER PRIMARY KEY,
+          command_id TEXT NOT NULL REFERENCES execution_commands(command_id),
+          receipt_json TEXT NOT NULL,
+          disposition TEXT NOT NULL CHECK(disposition IN ('applied','history')),
+          submitted_generation INTEGER NOT NULL,
+          observed_at TEXT NOT NULL
+        ) STRICT;
+        CREATE TRIGGER command_observations_no_update BEFORE UPDATE ON execution_command_observations
+        BEGIN SELECT RAISE(ABORT, 'command observations are immutable'); END;
+        CREATE TRIGGER command_observations_no_delete BEFORE DELETE ON execution_command_observations
+        BEGIN SELECT RAISE(ABORT, 'command observations are immutable'); END;
+        CREATE TABLE execution_guard_decisions (
+          decision_id INTEGER PRIMARY KEY,
+          run_id TEXT NOT NULL REFERENCES execution_runs(run_id),
+          policy_json TEXT NOT NULL,
+          result_json TEXT NOT NULL,
+          writer_generation INTEGER NOT NULL,
+          decided_at TEXT NOT NULL
+        ) STRICT;
+        CREATE TABLE execution_settlements (
+          execution_id TEXT PRIMARY KEY REFERENCES executions(execution_id),
+          stop_command_id TEXT NOT NULL UNIQUE REFERENCES execution_commands(command_id),
+          artifact_id TEXT NOT NULL REFERENCES source_artifacts(artifact_id),
+          settled_generation INTEGER NOT NULL,
+          settled_at TEXT NOT NULL
+        ) STRICT;
+        CREATE TRIGGER execution_guard_decisions_no_update BEFORE UPDATE ON execution_guard_decisions
+        BEGIN SELECT RAISE(ABORT, 'guard history is immutable'); END;
+        CREATE TRIGGER execution_guard_decisions_no_delete BEFORE DELETE ON execution_guard_decisions
+        BEGIN SELECT RAISE(ABORT, 'guard history is immutable'); END;
+      `);
+    },
+  },
 ];
