@@ -46,6 +46,15 @@ export class SourceArchives {
     }
     this.assertRegularTree(gitDir);
     const files = this.walk(root).filter(path => path !== '.git' && !path.startsWith('.git/'));
+    let plannedExpandedBytes = 0;
+    const reserve = (bytes: number, metadataBytes: number) => {
+      plannedExpandedBytes += 4 * Math.ceil(bytes / 3) + metadataBytes;
+      if (plannedExpandedBytes > this.policy.maxExpandedBytes) this.reject('Expanded archive exceeds policy');
+    };
+    for (const path of files) {
+      const stat = lstatSync(join(root,path));
+      reserve(stat.size,Buffer.byteLength(path) + 128);
+    }
     const entries = this.git(root, ['ls-files', '--stage', '-z']).toString().split('\0').filter(Boolean);
     const index = entries.map(entry => {
       const match = /^(\d+) ([a-f0-9]+) ([0-3])\t([\s\S]+)$/.exec(entry);
@@ -54,6 +63,9 @@ export class SourceArchives {
       if (!mode || !objectId || !stage || !path) this.reject('Malformed Git index entry');
       safePath(path);
       if (this.excluded(path) || !/^100(?:644|755)$/.test(mode)) this.reject('Index contains excluded or unsupported source');
+      const bytes = Number(this.git(root,['cat-file','-s',objectId]).toString().trim());
+      if (!Number.isSafeInteger(bytes) || bytes < 0) this.reject('Invalid Git index blob size');
+      reserve(bytes,Buffer.byteLength(path) + 128);
       const data = this.git(root, ['cat-file', 'blob', objectId]);
       this.assertNoCredential(data);
       return { path, mode, oid: objectId, stage: Number(stage), data: data.toString('base64') };
@@ -74,9 +86,13 @@ export class SourceArchives {
       const path = split < 0 ? '' : entry.slice(split+1);
       if (path && this.excluded(path)) this.reject('History contains an excluded credential path');
       if (this.git(root, ['cat-file', '-t', objectId]).toString().trim() === 'blob') {
+        const size = Number(this.git(root,['cat-file','-s',objectId]).toString().trim());
+        if (!Number.isSafeInteger(size) || size < 0 || inspectedBytes + size > this.policy.maxExpandedBytes) {
+          this.reject('History exceeds preservation policy');
+        }
+        inspectedBytes += size;
         const blob = this.git(root, ['cat-file', 'blob', objectId]);
-        inspectedBytes += blob.length;
-        if (inspectedBytes > this.policy.maxExpandedBytes) this.reject('History exceeds preservation policy');
+        if (blob.length !== size) this.reject('Git history changed during capture');
         this.assertNoCredential(blob);
       }
     }
@@ -84,6 +100,8 @@ export class SourceArchives {
     try {
       const bundlePath = join(directory, 'history.bundle');
       this.git(root, ['bundle', 'create', bundlePath, '--all', 'HEAD', ...recovery]);
+      const bundleStat = lstatSync(bundlePath);
+      reserve(bundleStat.size,512 + refs.length * 128);
       const bundle = readFileSync(bundlePath);
       const head = this.git(root, ['rev-parse', '--verify', 'HEAD']).toString().trim();
       let headRef: string | null = null;

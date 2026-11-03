@@ -116,7 +116,12 @@ export class ExecutionSources {
       const stat = lstatSync(input.destination, { throwIfNoEntry: false });
       if (!stat || !stat.isDirectory() || stat.isSymbolicLink()) throw new StateError('RESTORE_RECONCILIATION_REQUIRED','Restore destination is missing or unsafe');
       const expected = this.verify(artifact.artifactId);
-      const observed = this.archives.capture(input.destination);
+      let observed: ReturnType<SourceArchives['capture']>;
+      try {
+        observed = this.archives.capture(input.destination);
+      } catch {
+        throw new StateError('RESTORE_RECONCILIATION_REQUIRED','Prior destination is incomplete or cannot be inspected');
+      }
       const actual = this.archives.verify(observed.bytes,observed.sha256);
       const identity = (value: SourceManifest) => canonicalJson({ head: value.head, headRef: value.headRef, refs: value.refs, files: value.files, index: value.index });
       if (identity(expected) !== identity(actual)) throw new StateError('RESTORE_RECONCILIATION_REQUIRED','Prior destination does not match source artifact');

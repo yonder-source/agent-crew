@@ -97,6 +97,22 @@ test('reuse rechecks exact task, workspace, readiness and budget',async () => {
   } finally { f.close(); }
 });
 
+test('execution capacity is isolated per repository',async () => {
+  const f = await setup();
+  try {
+    const now = f.now.toISOString();
+    f.database.prepare(`INSERT INTO jobs
+      (job_id, repository_id, issue_id, scope_revision_id, phase, requested_control, created_at, updated_at)
+      VALUES ('other-job','repo-2','issue-2','scope-2','coding','run',?,?)`).run(now,now);
+    f.database.prepare(`INSERT INTO executions
+      (execution_id, job_id, ownership_generation, lifecycle, created_at, updated_at)
+      VALUES ('other-execution','other-job',1,'active',?,?)`).run(now,now);
+    const execution = await f.continuations.reuse({ runId: f.run.runId, authority, policy, writerGeneration: 1,
+      inspectWorkspace: async () => ({ taskId: f.run.taskId, usable: true }) });
+    assert.equal(execution.executionId,'execution-1');
+  } finally { f.close(); }
+});
+
 test('corrupting a settled archive closes even the low-level terminal and replacement paths',async () => {
   const f = await setup();
   try {

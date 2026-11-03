@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { existsSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { createSourceFixture } from '../../tests/fixtures/execution-source-fixture.js';
 
@@ -60,8 +60,8 @@ test('reconciles an archive written before its receipt and a restore completed b
   } finally { f.close(); }
 });
 
-for (const scenario of ['never_created', 'removed'] as const) {
-  test(`missing restore destination remains a modeled reconciliation state: ${scenario}`, async () => {
+for (const scenario of ['never_created', 'removed', 'partial'] as const) {
+  test(`incomplete restore destination remains modeled reconciliation state: ${scenario}`, async () => {
     const f = await createSourceFixture();
     try {
       await f.stop();
@@ -72,6 +72,11 @@ for (const scenario of ['never_created', 'removed'] as const) {
         f.commands.intent(request.commandId, artifact.runId, 'checkpoint',
           { action: 'restore', artifactId: artifact.artifactId, destination: request.destination }, 1);
         assert.equal(f.commands.claim(request.commandId, 1), true);
+      } else if (scenario === 'partial') {
+        f.commands.intent(request.commandId, artifact.runId, 'checkpoint',
+          { action: 'restore', artifactId: artifact.artifactId, destination: request.destination }, 1);
+        assert.equal(f.commands.claim(request.commandId, 1), true);
+        mkdirSync(request.destination);
       } else {
         f.sources.restore(request);
         rmSync(request.destination, { recursive: true });
@@ -80,7 +85,7 @@ for (const scenario of ['never_created', 'removed'] as const) {
       assert.throws(() => f.sources.restore(request), {
         name: 'StateError', code: 'RESTORE_RECONCILIATION_REQUIRED',
       });
-      assert.equal(existsSync(request.destination), false);
+      assert.equal(existsSync(request.destination), scenario === 'partial');
       const after = f.commands.get(request.commandId);
       assert.equal(after?.started, true);
       assert.equal(after?.requestJson, before?.requestJson);

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, symlinkSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, symlinkSync, truncateSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { gzipSync } from 'node:zlib';
@@ -96,5 +96,17 @@ test('retains local commits that are no longer reachable from the current branch
     f.archives.restore(archive.bytes,archive.sha256,restored);
     assert.equal(git(restored,'rev-parse',`refs/agent-crew/recovery/${unfinished}`).trim(),unfinished);
     assert.equal(git(restored,'rev-parse','HEAD').trim(),base);
+  } finally { f.close(); }
+});
+
+test('rejects a workspace file exceeding the expanded archive policy',() => {
+  const f = fixture();
+  try {
+    const largeFile = join(f.workspace,'large.bin');
+    writeFileSync(largeFile,'');
+    truncateSync(largeFile,5_000_000);
+    const bounded = new SourceArchives({ scratchDirectory: join(f.root,'bounded-scratch'), maxArchiveBytes: 1000000,
+      maxExpandedBytes: 4000000, maxFiles: 1000, gitTimeoutMs: 5000, excludedPaths: [] });
+    assert.throws(() => bounded.capture(f.workspace), { code: 'SOURCE_ARCHIVE_UNSAFE' });
   } finally { f.close(); }
 });

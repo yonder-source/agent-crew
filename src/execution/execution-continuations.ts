@@ -72,7 +72,7 @@ export class ExecutionContinuations {
         task.task.requestFingerprint !== request.requestFingerprint || workspace.taskId !== run.taskId || !workspace.usable ||
         inference === 'unknown' || this.commands.forRun(run.runId,'stop').length ||
         this.commands.forRun(run.runId,'deadline').some(command => command.receiptJson === null)) throw new StateError('CONTINUATION_UNVERIFIED','Existing runtime/workspace cannot be reused');
-      this.assertCapacity(authority.capacity,run.executionId);
+      this.assertCapacity(authority.capacity,run.jobId,run.executionId);
       this.assertBudget(run.jobId,run.executionId,input.policy);
       const record = this.executions.get(run.executionId);
       if (!record) throw new StateError('EXECUTION_NOT_FOUND','Execution unavailable');
@@ -86,7 +86,7 @@ export class ExecutionContinuations {
     const authority = authoritySchema.parse(input.authority);
     parseGuardPolicy(input.policy);
     this.assertCurrent(run.executionId,authority.scopeRevisionId,authority.policyVersion,input.writerGeneration,true);
-    this.assertCapacity(authority.capacity,run.executionId);
+    this.assertCapacity(authority.capacity,run.jobId,run.executionId);
     this.assertBudget(run.jobId,run.executionId,input.policy);
     this.commands.mutate(run.runId,input.writerGeneration,'execution_replacement_authorized',() =>
       ({ artifactId: input.artifactId, newExecutionId: input.newExecutionId, destination: input.destination }),authority);
@@ -97,7 +97,7 @@ export class ExecutionContinuations {
       // An old writer's work may be stopped/preserved, but only the current writer
       // can authorize a new execution after checking today's scope and readiness.
       this.assertCurrent(run.executionId,authority.scopeRevisionId,authority.policyVersion,input.writerGeneration,true);
-      this.assertCapacity(authority.capacity,run.executionId);
+      this.assertCapacity(authority.capacity,run.jobId,run.executionId);
       this.assertBudget(run.jobId,run.executionId,input.policy);
       assertExecutionSettled(this.state,run.executionId);
       const old = this.state.getExecutionOrThrow(run.executionId);
@@ -143,9 +143,12 @@ export class ExecutionContinuations {
     }
   }
 
-  private assertCapacity(capacity: number, priorExecutionId: string): void {
-    const row = this.state.database.prepare("SELECT count(*) AS count FROM executions WHERE lifecycle <> 'terminal' AND execution_id <> ?")
-      .get(priorExecutionId) as { count: number };
+  private assertCapacity(capacity: number, jobId: string, priorExecutionId: string): void {
+    const row = this.state.database.prepare(`SELECT count(*) AS count FROM executions e
+      JOIN jobs j USING (job_id)
+      WHERE j.repository_id = (SELECT repository_id FROM jobs WHERE job_id = ?)
+        AND e.lifecycle <> 'terminal' AND e.execution_id <> ?`)
+      .get(jobId,priorExecutionId) as { count: number };
     if (row.count >= capacity) throw new StateError('CAPACITY_EXHAUSTED','Configured execution capacity is exhausted');
   }
 
