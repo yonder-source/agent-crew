@@ -1,7 +1,7 @@
 # Runtime supervisor contract
 
-**Status:** Proposed Controller interface for WBS4. No live adapter or runtime
-integration is selected or enabled.
+**Status:** Executable Controller launch and execution-control contracts with
+deterministic adapters. No live adapter is selected or enabled.
 
 ## Boundary
 
@@ -54,7 +54,8 @@ installation; fake-supervisor tests cannot prove isolation.
 Live adapters must apply finite, configured transport timeouts to every
 operation. Timeout leaves the outcome unknown; an underlying supervisor action
 may still finish. Elapsed time never proves non-creation or permits resending
-start. Runtime active-time deadlines are separate supervisor controls in 4.2.
+start. Runtime active-time deadlines are separate supervisor controls described in
+[execution-guards.md](execution-guards.md).
 
 Supervisor adapters must validate provider responses before returning these
 typed outcomes. Transport errors, malformed responses, stale task generations,
@@ -106,3 +107,8 @@ contract only. Before enabling a live adapter, WBS4 requires the version-specifi
 OpenClaw/SDK, Swarm, identity, permission, and supervisor qualification recorded
 by T05, plus the approved installation and credential boundary. Metering
 qualification under T07 remains a separate prerequisite for unattended coding.
+
+The safety-command ledger, inference inspection, cumulative deadline ceilings,
+source preservation and continuation boundaries are specified in
+[execution-guards.md](execution-guards.md). A stopped task identity is never reused
+for a newly running task; replacement gets a new attributable identity.

@@ -138,3 +138,14 @@ administration access.
 
 Secret mounts, host-operation grants and credential rotation are covered by
 [T05](../spec.md#7-technical-decisions-and-verification).
+
+### Execution service contracts
+
+The Controller execution slice uses the accounting, guard, safety-command,
+stop/deadline, source archive and continuation services described in
+[execution-guards.md](execution-guards.md). Safety commands have a dedicated
+durable ledger so that revoking ordinary work does not revoke stopping or source
+preservation. Terminal/replacement paths share verified stop/source/effect
+settlement; preparing a publication source handoff preserves active ownership.
+Concrete OpenClaw/Swarm transport and independent deadline enforcement remain
+adapter implementation and installation qualification work.

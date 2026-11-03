@@ -4,6 +4,9 @@
 binding comes from the validated persisted launch request and its attributable
 supervisor receipt. Binding a run requires a current, active execution and scope.
 Transport authentication and concrete OpenClaw metering remain adapter work.
+Bind prospectively before model work, or supply the verified original run start
+time. Recovery bindings begin at launch dispatch; missing interval evidence
+before recovery remains unknown rather than disappearing from the budget.
 
 ## Identity and reconciliation
 
