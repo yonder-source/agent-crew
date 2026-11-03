@@ -601,4 +601,38 @@ export const controllerMigrations: Migration[] = [
       `);
 		},
 	},
+	{
+    version: 10,
+    name: "execution-accounting",
+    up: (database: Database.Database) => {
+      database.exec(`
+        CREATE TABLE execution_runs (
+          run_id TEXT PRIMARY KEY CHECK(length(run_id) > 0),
+          execution_id TEXT NOT NULL REFERENCES executions(execution_id),
+          job_id TEXT NOT NULL REFERENCES jobs(job_id),
+          launch_id TEXT NOT NULL REFERENCES effect_operations(operation_id),
+          task_id TEXT NOT NULL,
+          ownership_generation INTEGER NOT NULL CHECK(ownership_generation > 0),
+          bound_at TEXT NOT NULL
+        ) STRICT;
+        CREATE TABLE execution_observations (
+          observation_id TEXT PRIMARY KEY CHECK(length(observation_id) > 0),
+          run_id TEXT NOT NULL REFERENCES execution_runs(run_id),
+          evidence_json TEXT NOT NULL,
+          disposition TEXT NOT NULL CHECK(disposition IN ('applied', 'history')),
+          writer_generation INTEGER NOT NULL,
+          received_at TEXT NOT NULL
+        ) STRICT;
+        CREATE INDEX execution_observations_run ON execution_observations(run_id);
+        CREATE TRIGGER execution_runs_no_update BEFORE UPDATE ON execution_runs
+        BEGIN SELECT RAISE(ABORT, 'runtime bindings are immutable'); END;
+        CREATE TRIGGER execution_runs_no_delete BEFORE DELETE ON execution_runs
+        BEGIN SELECT RAISE(ABORT, 'runtime bindings are immutable'); END;
+        CREATE TRIGGER execution_observations_no_update BEFORE UPDATE ON execution_observations
+        BEGIN SELECT RAISE(ABORT, 'observations are append-only'); END;
+        CREATE TRIGGER execution_observations_no_delete BEFORE DELETE ON execution_observations
+        BEGIN SELECT RAISE(ABORT, 'observations are append-only'); END;
+      `);
+    },
+  },
 ];
